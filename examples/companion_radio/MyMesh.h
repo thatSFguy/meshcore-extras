@@ -125,6 +125,7 @@ public:
   bool floodAdvert();   // flood self-advert in the default scope (as the app's flood advert)
   void persistContacts() { saveContacts(); }   // for on-device UIs that add contacts
   void persistChannels() { saveChannels(); }   // for on-device UIs that add or remove channels
+  uint32_t lastChannelTimestamp() const { return _last_channel_ts; }   // sender's timestamp of the channel post being delivered
   void enterCLIRescue();
 
   int  getRecentlyHeard(AdvertPath dest[], int max_num);
@@ -279,6 +280,7 @@ private:
   };
   int offline_queue_len;
   Frame offline_queue[OFFLINE_QUEUE_SIZE];
+  uint32_t _last_channel_ts = 0;   // fork: for on-device UIs (reaction matching)
 
   struct AckTableEntry {
     unsigned long msg_sent;

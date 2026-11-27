@@ -30,7 +30,7 @@
 #define DECK_HANDSHAKES     4
 #define DECK_DM_ATTEMPTS    3
 #define DECK_CLOCK_SAMPLES  8
-#define DECK_MAX_ACTIONS    5
+#define DECK_MAX_ACTIONS    8
 
 enum class DChatType : uint8_t { CHANNEL, DIRECT };
 enum DChanKind : uint8_t { CHAN_PRIVATE, CHAN_PUBLIC, CHAN_HASHTAG };
@@ -52,7 +52,9 @@ struct DMsg {
   int8_t chat;                    // index into _chats
   uint8_t status;                 // DMsgStatus
   uint8_t attempt;                // DM retries so far
+  mutable uint16_t target;        // a reaction's message: its id; 0 = not looked yet, 0xFFFF = not found
   uint32_t ts;                    // our clock when sent/received
+  uint32_t sent_ts;               // the sender's timestamp (ours for our own): identifies it to reactions
   char text[DECK_TEXT_MAX + 1];   // incoming channel text keeps its "sender: " prefix
 };
 
@@ -91,11 +93,13 @@ enum class DScreen : uint8_t { CHATS, SETTINGS, CHAT, ACTIONS, NAME, ABOUT, PROM
 enum class DPrompt : uint8_t { NONE, CONFIRM_REQUEST, INCOMING_REQUEST, REMOVE_CHANNEL, CLEAR_MESSAGES, KEEP_OFF, JOIN_CHANNEL, SHARE_CHANNEL };
 // the app's add-channel choices
 enum DAddChoice : uint8_t { ADD_PUBLIC, ADD_CREATE_PRIVATE, ADD_JOIN_PRIVATE, ADD_HASHTAG };
-enum DAction : uint8_t { ACT_DM, ACT_ACCEPT, ACT_MENTION, ACT_RESEND, ACT_JOIN, ACT_CANCEL };
+enum DAction : uint8_t { ACT_DM, ACT_ACCEPT, ACT_MENTION, ACT_RESEND, ACT_JOIN, ACT_CANCEL, ACT_REACT, ACT_REPLY,
+                         ACT_EMOJI0 = 32 };   // ACT_EMOJI0 + i: react with the app's quick emoji i
 
 // Touch targets, registered while drawing (so they always match the screen).
 enum DHitType : uint8_t { HIT_TAB = 1, HIT_BACK, HIT_SEND, HIT_CHAT_ROW, HIT_MSG, HIT_ACTION,
-                          HIT_YES, HIT_NO, HIT_SET_ROW, HIT_REGION_ROW, HIT_LIST_ROW, HIT_FIELD, HIT_BUTTON };
+                          HIT_YES, HIT_NO, HIT_SET_ROW, HIT_REGION_ROW, HIT_LIST_ROW, HIT_FIELD, HIT_BUTTON,
+                          HIT_REPLY_CANCEL };
 struct DHit { int16_t x, y, w, h; uint8_t type; uint8_t index; };
 #define DECK_MAX_HITS       48
 #define DECK_REGION_ROWS    64
@@ -120,6 +124,9 @@ class UITask : public AbstractUITask {
   uint16_t _next_msg_id = 1;
   DHandshake _handshakes[DECK_HANDSHAKES];
   DOutgoingDM _out;
+  DOutgoingDM _late;                // the last DM given up on: a late ACK still marks it delivered
+  unsigned long _late_until = 0;
+  bool ackMatches(const DOutgoingDM& o, uint32_t ack_crc) const;
   DClockSample _clock[DECK_CLOCK_SAMPLES];
 
   DScreen _screen = DScreen::CHATS;
@@ -163,6 +170,15 @@ class UITask : public AbstractUITask {
   void drawSharePick();
   void shareChannel();
   char _compose[DECK_COMPOSE_MAX + 1];
+  // replying / reacting (the app's conventions, ../ui-kiss/KissText.h)
+  char _reply_prefix[80];         // "> Sender: quote\n", sent before the compose text; "" = not replying
+  char _reply_label[48];          // shown above the composer
+  uint16_t _react_to = 0;         // the message the emoji choices are for
+  bool isAttachedReaction(const DMsg& m);
+  bool reactionArrived(DMsg& m);
+  void reactionSummary(const DMsg& t, char* out, int out_size);
+  void startReply(const DMsg& m);
+  void sendReaction(int emoji);
   int _compose_len = 0;
 
   char _alert[96];
@@ -195,7 +211,7 @@ class UITask : public AbstractUITask {
   // sending
   int composeLimit() const;
   void sendCompose();
-  bool sendChannelText(uint8_t ch_idx, const char* text);
+  bool sendChannelText(uint8_t ch_idx, const char* text, uint32_t* sent_ts = NULL);
   void startDM(const ContactInfo& c, const char* text);
   void sendDMAttempt();
   void checkOutgoing();
@@ -268,6 +284,8 @@ class UITask : public AbstractUITask {
   int messageHeight(const DMsg& m, bool channel);
   void drawMessage(const DMsg& m, bool channel, int y_bottom, bool selected);
   void describeMessage(const DMsg& m, bool channel, char* sender, char* body, int body_size, bool* italic, char* extra);
+  const DMsg* reactionTarget(const DMsg& m);
+  void messageWords(const DMsg& m, const char** sender, const char** body, char* buf, int buf_size);
   void formatTime(uint32_t ts, char* out, bool clock_only);
   long localDay(uint32_t ts) const;
 

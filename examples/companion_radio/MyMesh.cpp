@@ -593,6 +593,7 @@ void MyMesh::onChannelMessageRecv(const mesh::GroupChannel &channel, mesh::Packe
     if (!getChannel(channel_idx, channel_details)) {
       strcpy(channel_details.name, "Unknown");
     }
+    _last_channel_ts = timestamp;   // fork: lets an on-device UI read the sender's timestamp
     _listener->onChannelMessageRecv(pkt, channel_details, text);
     _listener->onQueueSizeChanged(offline_queue_len);
   }
