@@ -10,9 +10,10 @@ What it adds:
 - **Personal Relay** (`examples/personal_relay`): a car-based directional edge
   relay, so a repeater in a parked car can serve its owner's companion devices
   without burdening the wider mesh (see [Why the Personal Relay](#why-the-personal-relay)).
-- **K.I.S.S. Messenger**: a standalone MeshCore messenger for a LilyGo
-  T-LoRa V2.1-1.6 with a CardKB keyboard, so you can read and type messages
-  without a phone (see [K.I.S.S. Messenger](#kiss-messenger)).
+- **K.I.S.S. Messenger**: a standalone MeshCore messenger, so you can read
+  and type messages without a phone: on a LilyGo T-Deck with an app-style
+  colour UI, or on a LilyGo T-LoRa V2.1-1.6 with a CardKB keyboard (see
+  [K.I.S.S. Messenger](#kiss-messenger)).
 - **GPS companion** for the LilyGo T-LoRa V2.1-1.6 with an external GPS module.
 
 **Install or configure from the browser:
@@ -83,9 +84,11 @@ Core protocol code in `src/` and the stock `simple_repeater` example are
 untouched, apart from a portable `ltoa()` replacement needed for STM32 builds.
 The rest of the fork:
 
-- K.I.S.S. Messenger: `examples/companion_radio/ui-kiss/`, its build target
-  in `variants/lilygo_tlora_v2_1/`, and two small public helpers added to the
-  companion's `MyMesh` (`floodAdvert()`, `persistContacts()`).
+- K.I.S.S. Messenger: `examples/companion_radio/ui-kiss/` (T-LoRa) and
+  `examples/companion_radio/ui-deck/` (T-Deck), their build targets in
+  `variants/lilygo_tlora_v2_1/` and `variants/lilygo_tdeck/`, and three small
+  public helpers added to the companion's `MyMesh` (`floodAdvert()`,
+  `persistContacts()`, `persistChannels()`).
 - A T-LoRa V2.1-1.6 BLE companion with an external GPS module
   (`LilyGo_TLora_V2_1_1_6_companion_radio_ble_gps`).
 - The website (`site/`, `tools/build_site_manifest.py`, Pages workflow).
@@ -328,7 +331,40 @@ your setup.
 
 ## K.I.S.S. Messenger
 
-A standalone messenger: a LilyGo T-LoRa V2.1-1.6 with an M5Stack CardKB
+A standalone MeshCore messenger, no phone needed, on two devices. Both run the
+companion firmware with their own on-device interface and no Bluetooth, work
+like the phone app's simple mode, and keep messages across a restart (Keep
+messages, on by default: saved to flash at most every 15 s; turning it off
+clears all messages). Repeated copies of the same DM or channel post are shown
+once.
+
+### LilyGo T-Deck
+
+The T-Deck's keyboard, touch screen and speaker, with a colour interface
+modelled on the phone app: chat list with avatars, message bubbles with
+delivery ticks (✓ sent, ✓✓ delivered, ✗ failed), and the app's dark theme and
+wording.
+
+- **Install:** [install page](https://thatsfguy.github.io/meshcore-extras/program.html)
+  → *K.I.S.S. Messenger* → *LilyGo TDeck*, or build target
+  `LilyGo_TDeck_kiss_messenger`.
+- **First start** asks for a name, then for your region: the app's 47
+  regional radio presets.
+- **Input:** type on the keyboard, tap and scroll on the screen; the trackball
+  moves and its click selects.
+- **Chats:** tap a message for its options: message the sender privately,
+  accept a DM request, mention, resend a failed DM.
+- **Channels** (Settings → Channels): join Public or a hashtag channel, create
+  a private one, or join one with its key. **Share** on a channel's page sends
+  it to a contact by DM as a `meshcore://channel/add` link (the app's share
+  format); a link received in a DM offers *Join <name>?*, and the key is never
+  shown in the chat.
+- **Settings** also cover adverts, sound, time zone, screen timeout, Keep
+  messages and Clear all messages.
+
+### LilyGo T-LoRa V2.1-1.6
+
+A LilyGo T-LoRa V2.1-1.6 with an M5Stack CardKB
 keyboard, a piezo buzzer and a vibration motor, in a 3D-printed case. Read and
 type messages on its OLED, no phone needed. It runs the MeshCore companion
 firmware with its own on-device interface (`ui-kiss`) and no Bluetooth; the
@@ -356,7 +392,7 @@ for the radio (USA / Canada and EU / UK presets) and channels.
 |---|---|
 | Chat list | Up/Down to choose, Enter to open, or just start typing. Esc opens the menu. |
 | Chat | Type, Enter to send. Up/Down scrolls. Tab asks someone in the channel for a DM. Esc goes back. |
-| Menu | Flood / zero-hop advert, name, sound on/off, vibrate on/off, about |
+| Menu | Flood / zero-hop advert, name, sound on/off, vibrate on/off, keep messages on/off, about |
 
 The screen sleeps after a minute; the first key press only wakes it. The BOOT
 button turns the screen on or off. Sent DMs show `..` while sending, `+` when

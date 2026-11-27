@@ -2,7 +2,7 @@ import { hasSerial } from "./serial.js";
 
 const KIND_TEXT = {
   relay: "For a relay you leave in your car. Configure it afterwards on the Configure relay page.",
-  kiss: "For the LilyGo T-LoRa V2.1-1.6 with a CardKB keyboard, buzzer (GPIO 15) and vibration motor (GPIO 13).",
+  kiss: "For the LilyGo T-Deck (keyboard, touch screen, speaker), or a LilyGo T-LoRa V2.1-1.6 with a CardKB keyboard, buzzer (GPIO 15) and vibration motor (GPIO 13).",
 };
 
 const PLATFORM_LABEL = { esp32: "ESP32", nrf52: "nRF52", rp2040: "RP2040", stm32: "STM32" };

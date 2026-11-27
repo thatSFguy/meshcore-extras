@@ -1,7 +1,7 @@
 name: Build and deploy site to GitHub Pages
 
 # Publishes site/ (install + configure pages) with firmware:
-#  - K.I.S.S. Messenger: built here from this commit
+#  - K.I.S.S. Messenger (T-LoRa V2.1-1.6 and T-Deck): built here from this commit
 #  - Personal relay: files from the newest published personal-relay release
 #    (run "Build Personal Relay Firmwares" with "publish" ticked first)
 on:
@@ -32,7 +32,9 @@ jobs:
         run: |
           FIRMWARE_VERSION=$(sed -n 's/^#define FIRMWARE_VERSION *"\(.*\)".*/\1/p' examples/companion_radio/MyMesh.h | head -1)
           export FIRMWARE_VERSION
-          /usr/bin/env bash build.sh build-firmware LilyGo_TLora_V2_1_1_6_kiss_messenger
+          for env in LilyGo_TLora_V2_1_1_6_kiss_messenger LilyGo_TDeck_kiss_messenger; do
+            /usr/bin/env bash build.sh build-firmware "$env"
+          done
           mkdir -p site/firmware
           cp out/*_kiss_messenger-*-merged.bin site/firmware/
 
