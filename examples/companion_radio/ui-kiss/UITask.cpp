@@ -3,6 +3,7 @@
 #include <helpers/AdvertDataHelpers.h>
 #include <SPIFFS.h>
 #include "../MyMesh.h"
+#include "KissText.h"
 #include "target.h"
 
 #ifndef KISS_AUTO_OFF_MILLIS
@@ -30,6 +31,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   memset(_msgs, 0, sizeof(_msgs));
   memset(_handshakes, 0, sizeof(_handshakes));
   memset(&_out, 0, sizeof(_out));
+  memset(&_late, 0, sizeof(_late));
   memset(_clock, 0, sizeof(_clock));
   _compose[0] = 0;
   _alert[0] = 0;
@@ -88,7 +90,8 @@ bool UITask::isDefaultName() const {
 
 #define KEEP_PREF_PATH  "/kiss_ui"
 #define STORE_PATH      "/kiss_msgs"
-#define STORE_MAGIC     0x314D534BUL   // "KSM1"
+#define STORE_MAGIC_V1  0x314D534BUL   // "KSM1": no sender timestamps
+#define STORE_MAGIC     0x324D534BUL   // "KSM2"
 #define STORE_DELAY_MS  15000
 
 struct KStoredMsgHead {
@@ -97,7 +100,9 @@ struct KStoredMsgHead {
   uint8_t text_len;
   uint8_t reserved;
   uint8_t key[PUB_KEY_SIZE];   // channel: its 16-byte secret (zero padded); DM: the contact's key
+  uint32_t sent_ts;            // KSM2 on: the sender's timestamp
 };
+#define STORED_HEAD_V1  (sizeof(KStoredMsgHead) - sizeof(uint32_t))
 
 void UITask::loadKeepPref() {
   _keep_msgs = true;   // default on; the file only exists once it's been changed
@@ -137,6 +142,7 @@ void UITask::saveMessages() {
     memset(&h, 0, sizeof(h));
     h.type = (uint8_t)c.type;
     h.status = m.status;
+    h.sent_ts = m.sent_ts;
     size_t len = strlen(m.text);
     h.text_len = len > 255 ? 255 : len;
     if (c.type == KChatType::CHANNEL) {
@@ -156,13 +162,15 @@ void UITask::loadMessages() {
   File f = SPIFFS.open(STORE_PATH, "r");
   if (!f) return;
   uint32_t magic = 0;
-  if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || magic != STORE_MAGIC) {
+  if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || (magic != STORE_MAGIC && magic != STORE_MAGIC_V1)) {
     f.close();
     return;
   }
   KStoredMsgHead h;
   uint32_t order = 1;   // restored chats keep their relative order, older than anything new
-  while (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h)) {
+  size_t head_size = magic == STORE_MAGIC_V1 ? STORED_HEAD_V1 : sizeof(h);
+  memset(&h, 0, sizeof(h));
+  while (f.read((uint8_t*)&h, head_size) == head_size) {
     char text[256];
     if (f.read((uint8_t*)text, h.text_len) != h.text_len) break;
     text[h.text_len] = 0;
@@ -184,6 +192,8 @@ void UITask::loadMessages() {
     m->chat = chat;
     // a DM that was still being sent when we stopped didn't get through
     m->status = h.status == MSG_OUT_PENDING ? MSG_OUT_FAILED : h.status;
+    m->target = 0;
+    m->sent_ts = h.sent_ts;
     StrHelper::strncpy(m->text, text, sizeof(m->text));
     _chats[chat].last_activity = order++;
   }
@@ -196,6 +206,7 @@ void UITask::clearMessages() {
   _msg_head = 0;
   _scroll = 0;
   memset(&_out, 0, sizeof(_out));
+  memset(&_late, 0, sizeof(_late));
   for (int i = 0; i < _num_chats; i++) {
     _chats[i].unread = 0;
     _chats[i].last_activity = 0;
@@ -271,10 +282,64 @@ KMsg* UITask::addMsg(int chat, uint8_t status, const char* text) {
   if (_next_msg_id == 0) _next_msg_id = 1;
   m->chat = chat;
   m->status = status;
+  m->target = 0;
+  m->sent_ts = 0;
   StrHelper::strncpy(m->text, text, sizeof(m->text));
   _dirty = true;
   messagesChanged();
   return m;
+}
+
+// The sender name (channels) and body of a message, as reactions hash them:
+// an incoming channel post is "sender: body"; ours is sent under our name.
+void UITask::messageWords(const KMsg& m, const char** sender, const char** body, char* buf, int buf_size) {
+  *sender = NULL;
+  *body = m.text;
+  if (m.chat < 0 || m.chat >= _num_chats || _chats[m.chat].type != KChatType::CHANNEL) return;
+  if (m.status != MSG_IN) { *sender = _node_prefs->node_name; return; }
+  const char* sep = strstr(m.text, ": ");
+  int len = sep ? sep - m.text : 0;
+  if (len > 0 && len < buf_size) {
+    memcpy(buf, m.text, len);
+    buf[len] = 0;
+    *sender = buf;
+    *body = sep + 2;
+  }
+}
+
+// The message a reaction points at (found as the app does: the newest
+// earlier message in the chat whose hash matches), or NULL.
+KMsg* UITask::reactionTarget(KMsg& m) {
+  if (m.target == 0xFFFF) return NULL;
+  if (m.target) {
+    KMsg* t = findMsg(m.target);
+    if (t) return t;
+  }
+  m.target = 0xFFFF;
+  char name[32];
+  const char *sender, *body;
+  messageWords(m, &sender, &body, name, sizeof(name));
+  KissReaction r;
+  if (!kissParseReaction(body, &r)) return NULL;
+  int idx = &m - _msgs;
+  int newest = (_msg_head + KISS_MAX_MSGS - 1) % KISS_MAX_MSGS;
+  for (int n = 1; n < KISS_MAX_MSGS; n++) {
+    int j = (idx - n + KISS_MAX_MSGS) % KISS_MAX_MSGS;
+    if (j == newest) break;   // wrapped round to newer messages
+    KMsg& c = _msgs[j];
+    if (!c.id || c.chat != m.chat) continue;
+    char cname[32];
+    const char *cs, *cb;
+    messageWords(c, &cs, &cb, cname, sizeof(cname));
+    KissReaction cr;
+    if (kissParseReaction(cb, &cr)) continue;   // reactions aren't reacted to
+    bool channel = _chats[m.chat].type == KChatType::CHANNEL;
+    if (kissReactionMatches(r, c.sent_ts, channel ? (cs ? cs : "") : NULL, cb)) {
+      m.target = c.id;
+      return &c;
+    }
+  }
+  return NULL;
 }
 
 KMsg* UITask::findMsg(uint16_t id) {
@@ -303,10 +368,11 @@ int UITask::composeLimit() const {
   return KISS_COMPOSE_MAX;
 }
 
-bool UITask::sendChannelText(uint8_t ch_idx, const char* text) {
+bool UITask::sendChannelText(uint8_t ch_idx, const char* text, uint32_t* sent_ts) {
   ChannelDetails cd;
   if (!the_mesh.getChannel(ch_idx, cd)) return false;
   uint32_t ts = the_mesh.getRTCClock()->getCurrentTimeUnique();
+  if (sent_ts) *sent_ts = ts;
   return the_mesh.sendGroupMessage(ts, cd.channel, _node_prefs->node_name, text, strlen(text));
 }
 
@@ -314,8 +380,9 @@ void UITask::sendCompose() {
   if (_compose_len == 0 || _chat < 0) return;
   KChat& c = _chats[_chat];
   if (c.type == KChatType::CHANNEL) {
-    if (sendChannelText(c.ch_idx, _compose)) {
-      addMsg(_chat, MSG_OUT, _compose);
+    uint32_t ts = 0;
+    if (sendChannelText(c.ch_idx, _compose, &ts)) {
+      addMsg(_chat, MSG_OUT, _compose)->sent_ts = ts;
     } else {
       showAlert("Send failed", 1500);
       return;
@@ -345,9 +412,12 @@ void UITask::startDM(const ContactInfo& c, const char* text) {
   _out.msg_id = m->id;
   memcpy(_out.pub_key, c.id.pub_key, PUB_KEY_SIZE);
   _out.timestamp = the_mesh.getRTCClock()->getCurrentTimeUnique();
+  m->sent_ts = _out.timestamp;
   _out.attempt = 0;
   sendDMAttempt();
 }
+
+#define DM_LATE_ACK_MILLIS  30000UL
 
 void UITask::sendDMAttempt() {
   KMsg* m = findMsg(_out.msg_id);
@@ -383,10 +453,38 @@ void UITask::checkOutgoing() {
     _out.active = false;
     _dirty = true;
     messagesChanged();
+    // An ACK can still arrive after we stop waiting: keep listening for 30 s,
+    // as the app does (its SendRetry.LATE_ACK_GRACE_MS), so a delivered
+    // message isn't left showing as failed.
+    _late = _out;
+    _late.active = true;
+    _late_until = millis() + DM_LATE_ACK_MILLIS;
+    // No ACK even after a flood usually means they can't read it: they don't
+    // have our key (a DM request that only half completed, or they removed us).
+    showAlert("Not delivered. They may lack your key: send a flood advert", 6000);
   }
 }
 
+bool UITask::ackMatches(const KOutgoingDM& o, uint32_t ack_crc) const {
+  if (ack_crc == 0) return false;
+  for (int i = 0; i <= o.attempt && i < KISS_DM_ATTEMPTS; i++) {
+    if (o.acks[i] == ack_crc) return true;
+  }
+  return false;
+}
+
 void UITask::onACKRecv(uint32_t ack_crc) {
+  if (_late.active && (long)(millis() - _late_until) < 0 && ackMatches(_late, ack_crc)) {
+    _late.active = false;
+    KMsg* m = findMsg(_late.msg_id);
+    if (m && m->status == MSG_OUT_FAILED) {
+      m->status = MSG_OUT_DELIVERED;   // it got there after all
+      _dirty = true;
+      messagesChanged();
+      notify(UIEventType::ack);
+    }
+    return;
+  }
   if (!_out.active) return;
   for (int i = 0; i <= _out.attempt && i < KISS_DM_ATTEMPTS; i++) {
     if (_out.acks[i] == ack_crc && ack_crc != 0) {
@@ -688,7 +786,7 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
     rebuildChats();
     chat = findDirectChat(from.id.pub_key);
   }
-  addMsg(chat, MSG_IN, text);
+  addMsg(chat, MSG_IN, text)->sent_ts = sender_timestamp;
   markActivity(chat, true);
   char msg[48];
   snprintf(msg, sizeof(msg), "DM from %s", from.name);
@@ -706,7 +804,7 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
     rebuildChats();
     chat = ch_idx >= 0 ? findChannelChat(ch_idx) : -1;
   }
-  addMsg(chat, MSG_IN, text);
+  addMsg(chat, MSG_IN, text)->sent_ts = the_mesh.lastChannelTimestamp();
   markActivity(chat, true);
 
   // "sender: body"
@@ -1103,7 +1201,7 @@ void UITask::drawChat() {
     if (_msgs[i].id && _msgs[i].chat == _chat) order[count++] = i;
   }
   // only the newest messages that fit
-  char buf[KISS_TEXT_MAX + 32];
+  char buf[KISS_TEXT_MAX + 96];
   char wrapped[12][COLS + 1];
   for (int k = count - 1; k >= 0 && total < MAX_LINES; k--) {
     KMsg& m = _msgs[order[k]];
@@ -1112,7 +1210,7 @@ void UITask::drawChat() {
     else if (m.status == MSG_OUT_DELIVERED) mark = " +";
     else if (m.status == MSG_OUT_FAILED) mark = " !";
     char text[KISS_TEXT_MAX + 1];
-    _display->translateUTF8ToBlocks(text, m.text, sizeof(text));
+    StrHelper::strncpy(text, m.text, sizeof(text));
     char* mch = strstr(text, "] mch:");
     if (mch) mch[1] = 0;   // "DM request for @[Bob]" without the key
 
@@ -1135,7 +1233,39 @@ void UITask::drawChat() {
     } else {
       StrHelper::strncpy(label, c.name, sizeof(label));   // DM: the other person
     }
-    snprintf(buf, sizeof(buf), "%s%s%s%s", label, label[0] ? " " : "", body, mark);
+    // A reference to another message reads "[its first words]": a reaction
+    // as "[why] reacted with thumbs up", a reply as "[why] why what?" (the
+    // app's conventions, KissText.h)
+    char lab[LABEL_MAX + 1];
+    _display->translateUTF8ToBlocks(lab, label, sizeof(lab));
+    StrHelper::strncpy(label, lab, sizeof(label));
+    char line[KISS_TEXT_MAX + 64], snip[48];
+    KissReaction r;
+    if (kissParseReaction(body, &r)) {
+      KMsg* t = reactionTarget(m);
+      if (t) {
+        char tn[32];
+        const char *ts, *tb;
+        messageWords(*t, &ts, &tb, tn, sizeof(tn));
+        kissSnippet(tb, snip, sizeof(snip), 14);
+        snprintf(line, sizeof(line), "[%s] reacted with %s", snip, r.emoji);
+      } else {
+        kissReactionText(r, _node_prefs->node_name, line, sizeof(line));
+      }
+    } else {
+      char quote[64];
+      const char* reply = kissSplitQuote(body, quote, sizeof(quote));
+      if (quote[0]) {
+        kissSnippet(kissQuoteWords(quote), snip, sizeof(snip), 14);
+        snprintf(line, sizeof(line), "[%s] %s", snip, reply);
+      } else {
+        StrHelper::strncpy(line, reply, sizeof(line));
+      }
+    }
+    for (char* c = line; *c; c++) if (*c == '\n' || *c == '\r') *c = ' ';   // the OLED wraps it anyway
+    char shown[KISS_TEXT_MAX + 64];
+    _display->translateUTF8ToBlocks(shown, line, sizeof(shown));
+    snprintf(buf, sizeof(buf), "%s%s%s%s", label, label[0] ? " " : "", shown, mark);
     int n = wrapText(buf, wrapped, 12);
     // prepend (we walk newest -> oldest)
     int shift = n;
@@ -1266,14 +1396,27 @@ void UITask::render() {
     case KScreen::PROMPT: drawPrompt(); break;
   }
   if (_alert_until && (long)(millis() - _alert_until) < 0) {
-    int w = _display->getTextWidth(_alert) + 8;
-    if (w > _display->width()) w = _display->width();
-    int x = (_display->width() - w) / 2;
-    _display->setColor(C_DARK);
-    _display->fillRect(x, 24, w, 14);
-    _display->setColor(C_LIGHT);
-    _display->drawRect(x, 24, w, 14);
-    _display->drawTextCentered(_display->width() / 2, 27, _alert);
+    if (_display->getTextWidth(_alert) + 8 <= _display->width()) {   // one line
+      int w = _display->getTextWidth(_alert) + 8;
+      int x = (_display->width() - w) / 2;
+      _display->setColor(C_DARK);
+      _display->fillRect(x, 24, w, 14);
+      _display->setColor(C_LIGHT);
+      _display->drawRect(x, 24, w, 14);
+      _display->drawTextCentered(_display->width() / 2, 27, _alert);
+    } else {   // wrapped, full width
+      char lines[4][COLS + 1];
+      int n = wrapText(_alert, lines, 4);
+      int h = n * ROW_H + 6, y = (_display->height() - h) / 2;
+      _display->setColor(C_DARK);
+      _display->fillRect(0, y, _display->width(), h);
+      _display->setColor(C_LIGHT);
+      _display->drawRect(0, y, _display->width(), h);
+      for (int i = 0; i < n; i++) {
+        _display->setCursor(3, y + 3 + i * ROW_H);
+        _display->print(lines[i]);
+      }
+    }
   }
   _display->endFrame();
 }

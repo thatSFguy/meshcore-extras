@@ -8,6 +8,7 @@
 #include <Fonts/FreeSansOblique9pt7b.h>
 #include <Fonts/FreeSansBold12pt7b.h>
 #include "../MyMesh.h"
+#include "../ui-kiss/KissText.h"
 #include "target.h"
 #include "DeckPresets.h"
 
@@ -115,7 +116,7 @@ static void toAscii(char* dest, const char* src, size_t size) {
   size_t j = 0;
   for (size_t i = 0; src[i] && j + 4 < size; i++) {
     uint8_t c = src[i];
-    if (c >= 0x20 && c < 0x7F) { dest[j++] = c; continue; }
+    if ((c >= 0x20 && c < 0x7F) || c == '\n') { dest[j++] = c; continue; }
     if (c < 0x80) continue;
     uint32_t cp = 0;
     int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
@@ -140,7 +141,7 @@ static int wrapText(const GFXfont* f, const char* text, int max_w, char lines[][
   int i = 0;
   while (text[i] && n < max_lines) {
     int start = i, w = 0, last_space = -1, j = i;
-    while (text[j]) {
+    while (text[j] && text[j] != '\n') {
       int cw = charWidth(f, text[j]);
       if (w + cw > max_w || j - start >= 63) break;
       if (text[j] == ' ') last_space = j;
@@ -149,6 +150,7 @@ static int wrapText(const GFXfont* f, const char* text, int max_w, char lines[][
     }
     int end, next;
     if (text[j] == 0) { end = j; next = j; }
+    else if (text[j] == '\n') { end = j; next = j + 1; }
     else if (last_space > start) { end = last_space; next = last_space + 1; }
     else { end = j > start ? j : start + 1; next = end; }
     int len = end - start;
@@ -217,6 +219,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
   if (_msgs == NULL) _msgs = (DMsg*)calloc(DECK_MAX_MSGS, sizeof(DMsg));
   memset(_handshakes, 0, sizeof(_handshakes));
   memset(&_out, 0, sizeof(_out));
+  memset(&_late, 0, sizeof(_late));
   memset(_clock, 0, sizeof(_clock));
   _compose[0] = 0;
   _alert[0] = 0;
@@ -288,7 +291,8 @@ bool UITask::isDefaultName() const {
 // offline queue.
 
 #define STORE_PATH      "/deck_msgs"
-#define STORE_MAGIC     0x314D4B44UL   // "DKM1"
+#define STORE_MAGIC_V1  0x314D4B44UL   // "DKM1": no sender timestamps
+#define STORE_MAGIC     0x324D4B44UL   // "DKM2"
 #define STORE_DELAY_MS  15000
 
 struct StoredMsgHead {
@@ -298,7 +302,9 @@ struct StoredMsgHead {
   uint8_t text_len;
   uint32_t ts;
   uint8_t key[PUB_KEY_SIZE];   // channel: its 16-byte secret (zero padded); DM: the contact's key
+  uint32_t sent_ts;            // DKM2 on: the sender's timestamp
 };
+#define STORED_HEAD_V1  (sizeof(StoredMsgHead) - sizeof(uint32_t))
 
 void UITask::messagesChanged() {
   if (!_ui.keep_msgs) return;
@@ -322,6 +328,7 @@ void UITask::saveMessages() {
     h.type = (uint8_t)c.type;
     h.status = m.status;
     h.attempt = m.attempt;
+    h.sent_ts = m.sent_ts;
     h.ts = m.ts;
     size_t len = strlen(m.text);
     h.text_len = len > 255 ? 255 : len;
@@ -342,12 +349,14 @@ void UITask::loadMessages() {
   File f = SPIFFS.open(STORE_PATH, "r");
   if (!f) return;
   uint32_t magic = 0;
-  if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || magic != STORE_MAGIC) {
+  if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || (magic != STORE_MAGIC && magic != STORE_MAGIC_V1)) {
     f.close();
     return;
   }
   StoredMsgHead h;
-  while (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h)) {
+  size_t head_size = magic == STORE_MAGIC_V1 ? STORED_HEAD_V1 : sizeof(h);
+  memset(&h, 0, sizeof(h));
+  while (f.read((uint8_t*)&h, head_size) == head_size) {
     char text[DECK_TEXT_MAX + 1];
     int len = h.text_len > DECK_TEXT_MAX ? DECK_TEXT_MAX : h.text_len;
     if (f.read((uint8_t*)text, h.text_len) != h.text_len) break;
@@ -371,6 +380,8 @@ void UITask::loadMessages() {
     // a DM that was still being sent when we stopped didn't get through
     m->status = h.status == MSG_OUT_PENDING ? MSG_OUT_FAILED : h.status;
     m->attempt = h.attempt;
+    m->target = 0;
+    m->sent_ts = h.sent_ts;
     m->ts = h.ts;
     StrHelper::strncpy(m->text, text, sizeof(m->text));
     if (h.ts > _chats[chat].last_activity) _chats[chat].last_activity = h.ts | 1;
@@ -384,6 +395,7 @@ void UITask::clearMessages() {
   _msg_head = 0;
   _sel_msg = -1;
   memset(&_out, 0, sizeof(_out));
+  memset(&_late, 0, sizeof(_late));
   for (int i = 0; i < _num_chats; i++) {
     _chats[i].unread = 0;
     _chats[i].last_activity = 0;
@@ -464,11 +476,66 @@ DMsg* UITask::addMsg(int chat, uint8_t status, const char* text) {
   m->chat = chat;
   m->status = status;
   m->attempt = 0;
+  m->target = 0;
+  m->sent_ts = 0;
   m->ts = the_mesh.getRTCClock()->getCurrentTime();
   StrHelper::strncpy(m->text, text, sizeof(m->text));
   _dirty = true;
   messagesChanged();
   return m;
+}
+
+// The sender name (channels) and body of a message, as reactions hash them:
+// an incoming channel post is "sender: body"; ours is sent under our name.
+void UITask::messageWords(const DMsg& m, const char** sender, const char** body, char* buf, int buf_size) {
+  *sender = NULL;
+  *body = m.text;
+  if (m.chat < 0 || m.chat >= _num_chats || _chats[m.chat].type != DChatType::CHANNEL) return;
+  if (m.status != MSG_IN) { *sender = _node_prefs->node_name; return; }
+  const char* sep = strstr(m.text, ": ");
+  int len = sep ? sep - m.text : 0;
+  if (len > 0 && len < buf_size) {
+    memcpy(buf, m.text, len);
+    buf[len] = 0;
+    *sender = buf;
+    *body = sep + 2;
+  }
+}
+
+// The message a reaction points at (found as the app does: the newest
+// earlier message in the chat whose hash matches), or NULL. Cached in
+// m.target, as drawing asks for it every frame.
+const DMsg* UITask::reactionTarget(const DMsg& m) {
+  if (m.target == 0xFFFF) return NULL;
+  if (m.target) {
+    const DMsg* t = findMsg(m.target);
+    if (t) return t;
+  }
+  m.target = 0xFFFF;
+  char name[32];
+  const char *sender, *body;
+  messageWords(m, &sender, &body, name, sizeof(name));
+  KissReaction r;
+  if (!kissParseReaction(body, &r)) return NULL;
+  bool channel = m.chat >= 0 && m.chat < _num_chats && _chats[m.chat].type == DChatType::CHANNEL;
+  int idx = &m - _msgs;
+  int newest = (_msg_head + DECK_MAX_MSGS - 1) % DECK_MAX_MSGS;
+  for (int n = 1; n < DECK_MAX_MSGS; n++) {
+    int j = (idx - n + DECK_MAX_MSGS) % DECK_MAX_MSGS;
+    if (j == newest) break;   // wrapped round to newer messages
+    const DMsg& c = _msgs[j];
+    if (!c.id || c.chat != m.chat) continue;
+    char cname[32];
+    const char *cs, *cb;
+    messageWords(c, &cs, &cb, cname, sizeof(cname));
+    KissReaction cr;
+    if (kissParseReaction(cb, &cr)) continue;   // reactions aren't reacted to
+    if (kissReactionMatches(r, c.sent_ts, channel ? (cs ? cs : "") : NULL, cb)) {
+      m.target = c.id;
+      return &c;
+    }
+  }
+  return NULL;
 }
 
 DMsg* UITask::findMsg(uint16_t id) {
@@ -534,10 +601,11 @@ int UITask::composeLimit() const {
   return DECK_COMPOSE_MAX;
 }
 
-bool UITask::sendChannelText(uint8_t ch_idx, const char* text) {
+bool UITask::sendChannelText(uint8_t ch_idx, const char* text, uint32_t* sent_ts) {
   ChannelDetails cd;
   if (!the_mesh.getChannel(ch_idx, cd)) return false;
   uint32_t ts = the_mesh.getRTCClock()->getCurrentTimeUnique();
+  if (sent_ts) *sent_ts = ts;
   return the_mesh.sendGroupMessage(ts, cd.channel, _node_prefs->node_name, text, strlen(text));
 }
 
@@ -545,8 +613,9 @@ void UITask::sendCompose() {
   if (_compose_len == 0 || _chat < 0) return;
   DChat& c = _chats[_chat];
   if (c.type == DChatType::CHANNEL) {
-    if (sendChannelText(c.ch_idx, _compose)) {
-      addMsg(_chat, MSG_OUT, _compose);
+    uint32_t ts = 0;
+    if (sendChannelText(c.ch_idx, _compose, &ts)) {
+      addMsg(_chat, MSG_OUT, _compose)->sent_ts = ts;
     } else {
       showAlert("Couldn't send", 2000);
       return;
@@ -577,9 +646,12 @@ void UITask::startDM(const ContactInfo& c, const char* text) {
   _out.msg_id = m->id;
   memcpy(_out.pub_key, c.id.pub_key, PUB_KEY_SIZE);
   _out.timestamp = the_mesh.getRTCClock()->getCurrentTimeUnique();
+  m->sent_ts = _out.timestamp;
   _out.attempt = 0;
   sendDMAttempt();
 }
+
+#define DM_LATE_ACK_MILLIS  30000UL
 
 void UITask::sendDMAttempt() {
   DMsg* m = findMsg(_out.msg_id);
@@ -616,10 +688,38 @@ void UITask::checkOutgoing() {
     _out.active = false;
     _dirty = true;
     messagesChanged();
+    // An ACK can still arrive after we stop waiting: keep listening for 30 s,
+    // as the app does (its SendRetry.LATE_ACK_GRACE_MS), so a delivered
+    // message isn't left showing as failed.
+    _late = _out;
+    _late.active = true;
+    _late_until = millis() + DM_LATE_ACK_MILLIS;
+    // No ACK even after a flood usually means they can't read it: they don't
+    // have our key (a DM request that only half completed, or they removed us).
+    showAlert("Not delivered. They may not have your key: send a flood advert (Settings) or ask for a DM again.", 6000);
   }
 }
 
+bool UITask::ackMatches(const DOutgoingDM& o, uint32_t ack_crc) const {
+  if (ack_crc == 0) return false;
+  for (int i = 0; i <= o.attempt && i < DECK_DM_ATTEMPTS; i++) {
+    if (o.acks[i] == ack_crc) return true;
+  }
+  return false;
+}
+
 void UITask::onACKRecv(uint32_t ack_crc) {
+  if (_late.active && (long)(millis() - _late_until) < 0 && ackMatches(_late, ack_crc)) {
+    _late.active = false;
+    DMsg* m = findMsg(_late.msg_id);
+    if (m && m->status == MSG_OUT_FAILED) {
+      m->status = MSG_OUT_DELIVERED;   // it got there after all
+      _dirty = true;
+      messagesChanged();
+      notify(UIEventType::ack);
+    }
+    return;
+  }
   if (!_out.active) return;
   for (int i = 0; i <= _out.attempt && i < DECK_DM_ATTEMPTS; i++) {
     if (_out.acks[i] == ack_crc && ack_crc != 0) {
@@ -1071,7 +1171,7 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
     rebuildChats();
     chat = findDirectChat(from.id.pub_key);
   }
-  addMsg(chat, MSG_IN, text);
+  addMsg(chat, MSG_IN, text)->sent_ts = sender_timestamp;
   markActivity(chat, true);
   // a channel shared with us: ask now, unless another question is up or
   // they're typing (Enter would answer it)
@@ -1102,7 +1202,7 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
     rebuildChats();
     chat = ch_idx >= 0 ? findChannelChat(ch_idx) : -1;
   }
-  addMsg(chat, MSG_IN, text);
+  addMsg(chat, MSG_IN, text)->sent_ts = the_mesh.lastChannelTimestamp();
   markActivity(chat, true);
 
   // "sender: body"
@@ -2412,6 +2512,35 @@ void UITask::drawNav() {
 
 // The app shows its control posts as plain sentences, worded for the reader.
 void UITask::describeMessage(const DMsg& m, bool channel, char* sender, char* body, int body_size, bool* italic, char* extra) {
+  // A reference to another message reads "[its first words]": a reaction as
+  // "[why] reacted with thumbs up", a reply as "[why] why what?" (the app's
+  // conventions, KissText.h). Reactions are read from the raw text: their
+  // emoji don't survive toAscii.
+  {
+    char who[32];
+    const char *wsender, *wbody;
+    messageWords(m, &wsender, &wbody, who, sizeof(who));
+    KissReaction r;
+    if (kissParseReaction(wbody, &r)) {
+      char line[160];
+      const DMsg* t = reactionTarget(m);
+      if (t) {
+        char tn[32], snip[48];
+        const char *ts, *tb;
+        messageWords(*t, &ts, &tb, tn, sizeof(tn));
+        kissSnippet(tb, snip, sizeof(snip), 24);
+        snprintf(line, sizeof(line), "[%s] reacted with %s", snip, r.emoji);
+      } else {
+        kissReactionText(r, _node_prefs->node_name, line, sizeof(line));
+      }
+      sender[0] = 0;
+      if (channel && m.status == MSG_IN && wsender) toAscii(sender, wsender, 32);
+      toAscii(body, line, body_size);
+      extra[0] = 0;
+      *italic = false;
+      return;
+    }
+  }
   char text[DECK_TEXT_MAX + 1];
   toAscii(text, m.text, sizeof(text));
   sender[0] = 0;
@@ -2448,6 +2577,18 @@ void UITask::describeMessage(const DMsg& m, bool channel, char* sender, char* bo
       else if (strcasecmp(name, _node_prefs->node_name) == 0) snprintf(body, body_size, "%s accepted your request. You can message each other directly.", who);
       else snprintf(body, body_size, "%s accepted %s's request to message privately.", who, name);
       return;
+    }
+  }
+  // a reply: "[what it quotes] what was said"
+  char replied[DECK_TEXT_MAX + 64];
+  {
+    char q[64];
+    const char* reply = kissSplitQuote(b, q, sizeof(q));
+    if (q[0]) {
+      char snip[48];
+      kissSnippet(kissQuoteWords(q), snip, sizeof(snip), 24);
+      snprintf(replied, sizeof(replied), "[%s] %s", snip, reply);
+      b = replied;
     }
   }
   // a shared channel link: show what it is, not its key

@@ -52,7 +52,9 @@ struct DMsg {
   int8_t chat;                    // index into _chats
   uint8_t status;                 // DMsgStatus
   uint8_t attempt;                // DM retries so far
+  mutable uint16_t target;        // a reaction's message: its id; 0 = not looked yet, 0xFFFF = not found
   uint32_t ts;                    // our clock when sent/received
+  uint32_t sent_ts;               // the sender's timestamp (ours for our own): identifies it to reactions
   char text[DECK_TEXT_MAX + 1];   // incoming channel text keeps its "sender: " prefix
 };
 
@@ -120,6 +122,9 @@ class UITask : public AbstractUITask {
   uint16_t _next_msg_id = 1;
   DHandshake _handshakes[DECK_HANDSHAKES];
   DOutgoingDM _out;
+  DOutgoingDM _late;                // the last DM given up on: a late ACK still marks it delivered
+  unsigned long _late_until = 0;
+  bool ackMatches(const DOutgoingDM& o, uint32_t ack_crc) const;
   DClockSample _clock[DECK_CLOCK_SAMPLES];
 
   DScreen _screen = DScreen::CHATS;
@@ -195,7 +200,7 @@ class UITask : public AbstractUITask {
   // sending
   int composeLimit() const;
   void sendCompose();
-  bool sendChannelText(uint8_t ch_idx, const char* text);
+  bool sendChannelText(uint8_t ch_idx, const char* text, uint32_t* sent_ts = NULL);
   void startDM(const ContactInfo& c, const char* text);
   void sendDMAttempt();
   void checkOutgoing();
@@ -268,6 +273,8 @@ class UITask : public AbstractUITask {
   int messageHeight(const DMsg& m, bool channel);
   void drawMessage(const DMsg& m, bool channel, int y_bottom, bool selected);
   void describeMessage(const DMsg& m, bool channel, char* sender, char* body, int body_size, bool* italic, char* extra);
+  const DMsg* reactionTarget(const DMsg& m);
+  void messageWords(const DMsg& m, const char** sender, const char** body, char* buf, int buf_size);
   void formatTime(uint32_t ts, char* out, bool clock_only);
   long localDay(uint32_t ts) const;
 
