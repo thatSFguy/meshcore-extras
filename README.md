@@ -338,6 +338,32 @@ messages, on by default: saved to flash at most every 15 s; turning it off
 clears all messages). Repeated copies of the same DM or channel post are shown
 once.
 
+A DM is sent up to three times, the last as a flood with a fresh route, as the
+app does. If its delivery confirmation arrives within 30 s after that, it
+still shows as delivered. A DM that is never confirmed shows a hint: usually
+the other side doesn't have your key (the DM request only half completed, or
+they removed you), so send a flood advert or ask for a DM again.
+
+Releases: [K.I.S.S. Messenger releases](https://github.com/thatSFguy/meshcore-extras/releases?q=kiss-messenger)
+(`-merged.bin` for a fresh install at 0x0, `.bin` to update at 0x10000), or
+the [install page](https://thatsfguy.github.io/meshcore-extras/program.html).
+
+### Works with the MeshCore phone app
+
+Messages and channels are standard MeshCore, so a K.I.S.S. chats with any
+MeshCore companion and app. Beyond that, it follows the conventions of the
+[MeshCore phone app](https://github.com/thatSFguy/meshcore-mobile-app) (Android), so
+the two work together:
+
+| Feature | How it works together |
+|---|---|
+| Private DMs | The app's request/accept exchange in the group chat (`DM request for @[name] mch:r:…` / `DM accepted …`): either side can ask, either side can accept. |
+| Channel sharing (T-Deck) | `meshcore://channel/add?name=…&secret=…`, the app's share link (also the official app's and `docs/qr_codes.md`'s format), sent by DM in either direction. |
+| Reactions | Received from the app (its `r:HHHH:II` format, shared with MeshCore Open; MeshCore One's format is read too) and matched to their message exactly as the app does. The T-Deck also sends them, so they land on the right message in the app. |
+| Replies | The app's `> Sender: quote` line; shown as `[quote] reply`, and the T-Deck sends replies the app shows as replies. |
+| Radio presets, channel rules | The T-Deck's region picker is the app's 47 regional presets; adding channels follows the app's rules (public, hashtag, private). |
+| Look (T-Deck) | The app's dark theme, avatar colours and letters, delivery ticks and wording. |
+
 ### LilyGo T-Deck
 
 The T-Deck's keyboard, touch screen and speaker, with a colour interface
@@ -352,8 +378,17 @@ wording.
   regional radio presets.
 - **Input:** type on the keyboard, tap and scroll on the screen; the trackball
   moves and its click selects.
-- **Chats:** tap a message for its options: message the sender privately,
-  accept a DM request, mention, resend a failed DM.
+- **Chats:** tap a message for its options: react, reply, message the
+  sender privately, accept a DM request, mention, resend a failed DM.
+- **Emoji** are drawn in colour, in messages, names and reactions (the
+  app's 184 reaction emoji; Noto Emoji images, Apache 2.0). Others show as
+  `?`.
+- **Reactions** show as chips under the message they're for (👍 2 🔥), and
+  only reactions to your own messages count as new. **React** offers the
+  app's six quick reactions.
+- **Replies:** **Reply** shows *Replying to …* above the text box (tap X or
+  press backspace on an empty box to cancel); a received reply shows its
+  quote in brackets: `[why] why what?`.
 - **Channels** (Settings → Channels): join Public or a hashtag channel, create
   a private one, or join one with its key. **Share** on a channel's page sends
   it to a contact by DM as a `meshcore://channel/add` link (the app's share
@@ -401,6 +436,10 @@ for the radio (USA / Canada and EU / UK presets) and channels.
 The screen sleeps after a minute; the first key press only wakes it. The BOOT
 button turns the screen on or off. Sent DMs show `..` while sending, `+` when
 delivered and `!` if delivery failed.
+
+**Reactions and replies** from the app read as one line each:
+`Bob [why] reacted with thumbs up` (emoji named in words, as the OLED can't
+draw them) and `Bob [why] why what?`.
 
 **Simple mode.** Like the phone app's simple mode, it never adds contacts on
 its own. To DM someone, ask in the group chat: Tab, pick the person, Enter.
