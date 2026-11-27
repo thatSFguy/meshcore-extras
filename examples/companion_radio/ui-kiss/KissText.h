@@ -228,16 +228,22 @@ static int kissStripVs(const char* src, int len, char* out, int out_size) {
   return n;
 }
 
-// the words for an emoji given as UTF-8, or NULL if it isn't in the list
-static const char* kissEmojiName(const char* e, int len) {
+// an emoji given as UTF-8: its index in KISS_EMOJI, or -1
+static int kissEmojiIndex(const char* e, int len) {
   char a[48], b[48];
-  if (len <= 0 || len >= (int)sizeof(a)) return NULL;
+  if (len <= 0 || len >= (int)sizeof(a)) return -1;
   kissStripVs(e, len, a, sizeof(a));
   for (int i = 0; i < KISS_EMOJI_COUNT; i++) {
     kissStripVs(KISS_EMOJI[i].utf8, strlen(KISS_EMOJI[i].utf8), b, sizeof(b));
-    if (strcmp(a, b) == 0) return KISS_EMOJI[i].name;
+    if (strcmp(a, b) == 0) return i;
   }
-  return NULL;
+  return -1;
+}
+
+// the words for an emoji given as UTF-8, or NULL if it isn't in the list
+static const char* kissEmojiName(const char* e, int len) {
+  int i = kissEmojiIndex(e, len);
+  return i >= 0 ? KISS_EMOJI[i].name : NULL;
 }
 
 static int kissHexVal(char c) {
@@ -249,6 +255,7 @@ static int kissHexVal(char c) {
 struct KissReaction {
   bool one;                // MeshCore One's format; else r:HHHH:II
   char emoji[40];          // the emoji's words, or "an emoji"
+  int16_t index;           // the emoji's index in KISS_EMOJI, or -1
   uint16_t hash16;         // r:HHHH:II's target
   char hash8[9];           // MeshCore One's target (normalised Crockford)
   char author[32];         // MeshCore One, channels: who wrote the target
@@ -272,6 +279,7 @@ static bool kissParseReaction(const char* text, KissReaction* r) {
     int hi = kissHexVal(text[7]), lo = kissHexVal(text[8]);
     if (hi < 0 || lo < 0 || hi * 16 + lo >= KISS_EMOJI_COUNT) return false;
     r->hash16 = h;
+    r->index = hi * 16 + lo;
     snprintf(r->emoji, sizeof(r->emoji), "%s", KISS_EMOJI[hi * 16 + lo].name);
     return true;
   }
@@ -313,8 +321,8 @@ static bool kissParseReaction(const char* text, KissReaction* r) {
     uint8_t c = *p;
     if (c == ' ' || c == '\t' || isalnum(c)) return false;   // typed words, not an emoji
   }
-  const char* name = kissEmojiName(e, elen);
-  snprintf(r->emoji, sizeof(r->emoji), "%s", name ? name : "an emoji");
+  r->index = kissEmojiIndex(e, elen);
+  snprintf(r->emoji, sizeof(r->emoji), "%s", r->index >= 0 ? KISS_EMOJI[r->index].name : "an emoji");
   r->one = true;
   return true;
 }

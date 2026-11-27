@@ -9,6 +9,7 @@
 #include <Fonts/FreeSansBold12pt7b.h>
 #include "../MyMesh.h"
 #include "../ui-kiss/KissText.h"
+#include "DeckEmoji.h"
 #include "target.h"
 #include "DeckPresets.h"
 
@@ -48,6 +49,8 @@ void IRAM_ATTR DeckInput::isrRight() { _edges[3]++; }
 #define PAD_X       8
 #define PAD_Y       5
 #define NAME_H      12           // sender name above the text (6x8 font)
+#define REACT_H     20           // the reactions pill under a bubble
+#define REPLY_H     20           // "Replying to ..." above the composer
 #define META_H      11           // time + status line
 #define MSG_GAP     4
 #define SEP_H       20           // day separator pill
@@ -95,10 +98,81 @@ static bool isLight(uint32_t rgb) {
 
 // ---------------------------------------------------------------- text helpers
 
+// ---------------------------------------------------------------- emoji
+//
+// Text is drawn from ASCII strings made by toAscii(). Emoji the T-Deck has
+// pictures for (the app's reaction list, DeckEmoji.h) become a 3-byte marker
+// there: EMOJI_MARK, then the KISS_EMOJI index as two bytes of 6 bits, each
+// with the top bit set (so never a space, newline or NUL). textWidth(),
+// wrapText() and drawText() treat a marker as one picture.
+
+#define EMOJI_MARK  0x01
+#define EMOJI_ADV   (DECK_EMOJI_PX + 2)   // its width in a line of text
+
+static inline bool isEmojiMark(const char* s) {
+  return (uint8_t)s[0] == EMOJI_MARK && ((uint8_t)s[1] & 0xC0) == 0x80 && ((uint8_t)s[2] & 0xC0) == 0x80;
+}
+static inline int emojiAt(const char* s) { return (((uint8_t)s[1] & 0x3F) << 6) | ((uint8_t)s[2] & 0x3F); }
+
+// The longest emoji from the list at src (UTF-8), ignoring U+FE0F; a skin
+// tone after it is swallowed (drawn in the default tone). Returns the bytes
+// it covers, 0 if none.
+static int matchEmoji(const char* src, int* idx) {
+  static const uint8_t VS16[] = { 0xEF, 0xB8, 0x8F };
+  int best = -1, best_len = 0;
+  for (int i = 0; i < KISS_EMOJI_COUNT; i++) {
+    const uint8_t* e = (const uint8_t*)KISS_EMOJI[i].utf8;
+    const uint8_t* p = (const uint8_t*)src;
+    bool ok = true;
+    while (*e) {
+      if (memcmp(e, VS16, 3) == 0) { e += 3; continue; }
+      if (p[0] == VS16[0] && p[1] == VS16[1] && p[2] == VS16[2]) { p += 3; continue; }
+      if (*p != *e) { ok = false; break; }
+      p++; e++;
+    }
+    if (ok && p - (const uint8_t*)src > best_len) { best = i; best_len = p - (const uint8_t*)src; }
+  }
+  if (best < 0) return 0;
+  const uint8_t* p = (const uint8_t*)src + best_len;
+  for (;;) {
+    if (p[0] == 0xEF && p[1] == 0xB8 && p[2] == 0x8F) p += 3;
+    else if (p[0] == 0xF0 && p[1] == 0x9F && p[2] == 0x8F && p[3] >= 0xBB && p[3] <= 0xBF) p += 4;   // U+1F3FB..1F3FF
+    else break;
+  }
+  *idx = best;
+  return p - (const uint8_t*)src;
+}
+
+static void drawEmoji(GFXcanvas16* g, int x, int y, int idx) {
+  if (idx < 0 || idx >= KISS_EMOJI_COUNT) return;
+  const uint16_t* rgb = DECK_EMOJI_RGB[DECK_EMOJI_IMAGE[idx]];
+  const uint8_t* alpha = DECK_EMOJI_ALPHA[DECK_EMOJI_IMAGE[idx]];
+  uint16_t* buf = g->getBuffer();
+  int W = g->width(), H = g->height();
+  for (int yy = 0; yy < DECK_EMOJI_PX; yy++) {
+    int py = y + yy;
+    if (py < 0 || py >= H) continue;
+    for (int xx = 0; xx < DECK_EMOJI_PX; xx++) {
+      int px = x + xx;
+      uint8_t a = alpha[yy * DECK_EMOJI_PX + xx];
+      if (a == 0 || px < 0 || px >= W) continue;
+      uint16_t sc = rgb[yy * DECK_EMOJI_PX + xx];
+      uint16_t& d = buf[py * W + px];
+      if (a >= 250) { d = sc; continue; }
+      // blend each 565 channel
+      uint32_t r = (((sc >> 11) & 31) * a + ((d >> 11) & 31) * (255 - a)) / 255;
+      uint32_t gg = (((sc >> 5) & 63) * a + ((d >> 5) & 63) * (255 - a)) / 255;
+      uint32_t b = ((sc & 31) * a + (d & 31) * (255 - a)) / 255;
+      d = (r << 11) | (gg << 5) | b;
+    }
+  }
+}
+
 static int textWidth(const GFXfont* f, const char* s) {
-  if (f == NULL) return 6 * strlen(s);
   int w = 0;
   for (; *s; s++) {
+    if (isEmojiMark(s)) { w += EMOJI_ADV; s += 2; continue; }
+    if (f == NULL) { w += 6; continue; }
     uint8_t c = *s;
     if (c < f->first || c > f->last) continue;
     w += f->glyph[c - f->first].xAdvance;
@@ -107,6 +181,8 @@ static int textWidth(const GFXfont* f, const char* s) {
 }
 
 static int charWidth(const GFXfont* f, char ch) {
+  if (ch == EMOJI_MARK) return EMOJI_ADV;   // the marker's other two bytes: width 0
+  if ((uint8_t)ch >= 0x80) return 0;
   char s[2] = { ch, 0 };
   return textWidth(f, s);
 }
@@ -118,6 +194,16 @@ static void toAscii(char* dest, const char* src, size_t size) {
     uint8_t c = src[i];
     if ((c >= 0x20 && c < 0x7F) || c == '\n') { dest[j++] = c; continue; }
     if (c < 0x80) continue;
+    int eidx, elen = matchEmoji(src + i, &eidx);
+    if (elen > 0) {   // a picture
+      if (j + 3 < size) {
+        dest[j++] = EMOJI_MARK;
+        dest[j++] = 0x80 | (eidx >> 6);
+        dest[j++] = 0x80 | (eidx & 0x3F);
+      }
+      i += elen - 1;
+      continue;
+    }
     uint32_t cp = 0;
     int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
     cp = c & (0x3F >> extra);
@@ -148,6 +234,8 @@ static int wrapText(const GFXfont* f, const char* text, int max_w, char lines[][
       w += cw;
       j++;
     }
+    while (j > start + 1 && ((uint8_t)text[j] & 0xC0) == 0x80 && text[j - 1] != ' ') j--;   // not inside an emoji
+    if (j > start && text[j - 1] == EMOJI_MARK && text[j]) j--;
     int end, next;
     if (text[j] == 0) { end = j; next = j; }
     else if (text[j] == '\n') { end = j; next = j + 1; }
@@ -172,6 +260,8 @@ static void ellipsize(const GFXfont* f, const char* s, int max_w, char* out, siz
   int len = strlen(out);
   while (len > 0) {
     out[--len] = 0;
+    if (len >= 1 && out[len - 1] == EMOJI_MARK) out[--len] = 0;   // don't leave half an emoji
+    else if (len >= 2 && out[len - 2] == EMOJI_MARK) { len -= 2; out[len] = 0; }
     char tmp[128];
     snprintf(tmp, sizeof(tmp), "%s...", out);
     if (textWidth(f, tmp) <= max_w) {
@@ -186,8 +276,24 @@ static void drawText(GFXcanvas16* g, const GFXfont* f, int x, int y, uint16_t co
   g->setFont(f);
   g->setTextSize(1);
   g->setTextColor(color);
-  g->setCursor(x, f ? y + 13 : y);
-  g->print(s);
+  int cx = x;
+  char run[128];
+  while (*s) {
+    if (isEmojiMark(s)) {   // centred on the line: 16 px on FreeSans' 17, around the 6x8 font
+      drawEmoji(g, cx + 1, f ? y : y - 4, emojiAt(s));
+      cx += EMOJI_ADV;
+      s += 3;
+      continue;
+    }
+    int n = 0;
+    while (s[n] && !isEmojiMark(s + n) && n < (int)sizeof(run) - 1) n++;
+    memcpy(run, s, n);
+    run[n] = 0;
+    g->setCursor(cx, f ? y + 13 : y);
+    g->print(run);
+    cx = g->getCursorX();
+    s += n;
+  }
 }
 
 static void drawTextRight(GFXcanvas16* g, const GFXfont* f, int right_x, int y, uint16_t color, const char* s) {
@@ -548,7 +654,7 @@ DMsg* UITask::findMsg(uint16_t id) {
 DMsg* UITask::lastMsg(int chat) {
   for (int n = 1; n <= DECK_MAX_MSGS; n++) {
     DMsg& m = _msgs[(_msg_head - n + DECK_MAX_MSGS) % DECK_MAX_MSGS];
-    if (m.id && m.chat == chat) return &m;
+    if (m.id && m.chat == chat && !isAttachedReaction(m)) return &m;
   }
   return NULL;
 }
@@ -558,9 +664,134 @@ int UITask::chatMessages(int chat, int* slots, int max) {
   int count = 0;
   for (int n = DECK_MAX_MSGS; n >= 1 && count < max; n--) {
     int i = (_msg_head - n + DECK_MAX_MSGS) % DECK_MAX_MSGS;
-    if (_msgs[i].id && _msgs[i].chat == chat) slots[count++] = i;
+    if (_msgs[i].id && _msgs[i].chat == chat && !isAttachedReaction(_msgs[i])) slots[count++] = i;
   }
   return count;
+}
+
+// An incoming reaction that found its message goes onto it. Like the app,
+// it only interrupts (unread count, toast, sound) when it's on our own
+// message. Returns false for anything else, which is handled as a message.
+bool UITask::reactionArrived(DMsg& m) {
+  if (!isAttachedReaction(m)) return false;
+  const DMsg* t = reactionTarget(m);
+  if (t->status == MSG_IN) { _dirty = true; return true; }   // someone else's conversation
+  markActivity(m.chat, true);
+  char who[32], name[32];
+  const char *sender, *body;
+  messageWords(m, &sender, &body, name, sizeof(name));
+  KissReaction r;
+  kissParseReaction(body, &r);
+  if (sender) toAscii(who, sender, sizeof(who));
+  else toAscii(who, _chats[m.chat].name, sizeof(who));
+  char utf8[96], msg[96];
+  snprintf(utf8, sizeof(utf8), "%s reacted %s to your message", who, r.index >= 0 ? KISS_EMOJI[r.index].utf8 : r.emoji);
+  toAscii(msg, utf8, sizeof(msg));
+  if (!(_screen == DScreen::CHAT && _chat == m.chat)) showAlert(msg, 3000);
+  notify(UIEventType::contactMessage);
+  return true;
+}
+
+// A reaction whose message was found is shown on that message, not as a
+// message of its own (as the app does).
+bool UITask::isAttachedReaction(const DMsg& m) {
+  if (m.target == 0xFFFF) return false;
+  if (m.target == 0) {   // not looked at yet: is it a reaction at all?
+    char name[32];
+    const char *sender, *body;
+    messageWords(m, &sender, &body, name, sizeof(name));
+    KissReaction r;
+    if (!kissParseReaction(body, &r)) { m.target = 0xFFFF; return false; }
+  }
+  return reactionTarget(m) != NULL;
+}
+
+// The reactions on t, as the app's chips: each emoji, with a count when
+// there's more than one ("<thumbs up> 2 <fire>"), ready to draw.
+void UITask::reactionSummary(const DMsg& t, char* out, int out_size) {
+  out[0] = 0;
+  int idx[8], counts[8], n = 0, more = 0;
+  for (int i = 0; i < DECK_MAX_MSGS; i++) {
+    const DMsg& m = _msgs[i];
+    if (!m.id || m.chat != t.chat || m.target == 0 || m.target == 0xFFFF || m.target != t.id) continue;
+    char name[32];
+    const char *sender, *body;
+    messageWords(m, &sender, &body, name, sizeof(name));
+    KissReaction r;
+    if (!kissParseReaction(body, &r)) continue;
+    int k;
+    for (k = 0; k < n; k++) if (idx[k] == r.index) break;
+    if (k < n) counts[k]++;
+    else if (n < 8) { idx[n] = r.index; counts[n] = 1; n++; }
+    else more++;
+  }
+  char utf8[96];
+  int len = 0;
+  utf8[0] = 0;
+  for (int k = 0; k < n && len < (int)sizeof(utf8) - 16; k++) {
+    const char* e = idx[k] >= 0 ? KISS_EMOJI[idx[k]].utf8 : "?";
+    if (counts[k] > 1) len += snprintf(utf8 + len, sizeof(utf8) - len, "%s%s %d", k ? "  " : "", e, counts[k]);
+    else len += snprintf(utf8 + len, sizeof(utf8) - len, "%s%s", k ? "  " : "", e);
+  }
+  if (more && len < (int)sizeof(utf8) - 8) snprintf(utf8 + len, sizeof(utf8) - len, "  +%d", more);
+  toAscii(out, utf8, out_size);
+}
+
+// Reply to m: the app's prefix, "> Sender: quote" (one line, at most 40
+// characters, cut with an ellipsis), then a newline; DMs have no sender.
+void UITask::startReply(const DMsg& m) {
+  char name[32];
+  const char *sender, *body;
+  messageWords(m, &sender, &body, name, sizeof(name));
+  char q[64];
+  const char* words = kissSplitQuote(body, q, sizeof(q));
+  if (*words == 0) words = q;
+  char one[48];
+  kissSnippet(words, one, sizeof(one), 40);
+  int ol = strlen(one);
+  if (ol >= 2 && one[ol - 1] == '.' && one[ol - 2] == '.') strcpy(one + ol - 2, "\xE2\x80\xA6");   // the app's ellipsis
+  bool channel = _chats[m.chat].type == DChatType::CHANNEL;
+  if (channel && sender) snprintf(_reply_prefix, sizeof(_reply_prefix), "> %s: %s\n", sender, one);
+  else snprintf(_reply_prefix, sizeof(_reply_prefix), "> %s\n", one);
+  char who[32] = "", shown[48];
+  if (channel && sender) toAscii(who, sender, sizeof(who));
+  else if (!channel) StrHelper::strncpy(who, m.status == MSG_IN ? _chats[m.chat].name : "yourself", sizeof(who));
+  kissSnippet(words, one, sizeof(one), 24);
+  toAscii(shown, one, sizeof(shown));
+  snprintf(_reply_label, sizeof(_reply_label), "%s%s%s", who, who[0] ? ": " : "", shown);
+  if (_compose_len > composeLimit()) { _compose_len = composeLimit(); _compose[_compose_len] = 0; }
+  _sel_msg = -1;
+}
+
+// React to message _react_to with the app's quick emoji i (r:HHHH:II).
+void UITask::sendReaction(int emoji) {
+  DMsg* t = findMsg(_react_to);
+  _react_to = 0;
+  _sel_msg = -1;
+  if (t == NULL || t->sent_ts == 0 || _chat < 0) return;
+  DChat& c = _chats[t->chat];
+  char name[32];
+  const char *sender, *body;
+  messageWords(*t, &sender, &body, name, sizeof(name));
+  char ts[12];
+  snprintf(ts, sizeof(ts), "%lu", (unsigned long)t->sent_ts);
+  uint32_t h = 0;
+  kissDartAdd(h, ts, 1000);
+  if (c.type == DChatType::CHANNEL) kissDartAdd(h, sender ? sender : "", 1000);
+  kissDartAdd(h, body, 5);
+  char text[16];
+  snprintf(text, sizeof(text), "r:%04x:%02x", kissDartEnd(h), emoji);
+  if (c.type == DChatType::CHANNEL) {
+    uint32_t sent = 0;
+    if (!sendChannelText(c.ch_idx, text, &sent)) { showAlert("Couldn't send", 2000); return; }
+    addMsg(t->chat, MSG_OUT, text)->sent_ts = sent;
+  } else {
+    if (_out.active) { showAlert("Still sending the last message", 2000); return; }
+    ContactInfo* ci = the_mesh.lookupContactByPubKey(c.pub_key, PUB_KEY_SIZE);
+    if (ci == NULL) { showAlert("Contact missing", 2000); return; }
+    startDM(*ci, text);
+  }
+  markActivity(t->chat, false);
 }
 
 // chats newest activity first (as the app); quiet ones keep their order
@@ -594,11 +825,12 @@ void UITask::markActivity(int chat, bool incoming) {
 
 int UITask::composeLimit() const {
   if (_screen == DScreen::NAME) return sizeof(_node_prefs->node_name) - 1;
+  int reply = strlen(_reply_prefix);
   if (_chat >= 0 && _chats[_chat].type == DChatType::CHANNEL) {
-    int lim = DECK_TEXT_MAX - (int)strlen(_node_prefs->node_name) - 2;   // "name: " prefix
-    return lim < DECK_COMPOSE_MAX ? lim : DECK_COMPOSE_MAX;
+    int lim = DECK_TEXT_MAX - (int)strlen(_node_prefs->node_name) - 2 - reply;   // "name: " prefix
+    return lim < DECK_COMPOSE_MAX - reply ? lim : DECK_COMPOSE_MAX - reply;
   }
-  return DECK_COMPOSE_MAX;
+  return DECK_COMPOSE_MAX - reply;
 }
 
 bool UITask::sendChannelText(uint8_t ch_idx, const char* text, uint32_t* sent_ts) {
@@ -612,10 +844,12 @@ bool UITask::sendChannelText(uint8_t ch_idx, const char* text, uint32_t* sent_ts
 void UITask::sendCompose() {
   if (_compose_len == 0 || _chat < 0) return;
   DChat& c = _chats[_chat];
+  char full[DECK_TEXT_MAX + 1];
+  snprintf(full, sizeof(full), "%s%s", _reply_prefix, _compose);
   if (c.type == DChatType::CHANNEL) {
     uint32_t ts = 0;
-    if (sendChannelText(c.ch_idx, _compose, &ts)) {
-      addMsg(_chat, MSG_OUT, _compose)->sent_ts = ts;
+    if (sendChannelText(c.ch_idx, full, &ts)) {
+      addMsg(_chat, MSG_OUT, full)->sent_ts = ts;
     } else {
       showAlert("Couldn't send", 2000);
       return;
@@ -630,11 +864,12 @@ void UITask::sendCompose() {
       showAlert("Contact missing", 2000);
       return;
     }
-    startDM(*ci, _compose);
+    startDM(*ci, full);
   }
   markActivity(_chat, false);
   _compose[0] = 0;
   _compose_len = 0;
+  _reply_prefix[0] = 0;
   _sel_msg = -1;
   _scroll_px = 0;
 }
@@ -1171,7 +1406,9 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
     rebuildChats();
     chat = findDirectChat(from.id.pub_key);
   }
-  addMsg(chat, MSG_IN, text)->sent_ts = sender_timestamp;
+  DMsg* m = addMsg(chat, MSG_IN, text);
+  m->sent_ts = sender_timestamp;
+  if (reactionArrived(*m)) return;
   markActivity(chat, true);
   // a channel shared with us: ask now, unless another question is up or
   // they're typing (Enter would answer it)
@@ -1202,7 +1439,9 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
     rebuildChats();
     chat = ch_idx >= 0 ? findChannelChat(ch_idx) : -1;
   }
-  addMsg(chat, MSG_IN, text)->sent_ts = the_mesh.lastChannelTimestamp();
+  DMsg* m = addMsg(chat, MSG_IN, text);
+  m->sent_ts = the_mesh.lastChannelTimestamp();
+  if (reactionArrived(*m)) return;
   markActivity(chat, true);
 
   // "sender: body"
@@ -1314,6 +1553,7 @@ void UITask::openChat(int idx) {
   if (_chat != idx) {
     _compose[0] = 0;
     _compose_len = 0;
+    _reply_prefix[0] = 0;
   }
   _chat = idx;
   _chats[idx].unread = 0;
@@ -1328,6 +1568,10 @@ bool UITask::composeKey(int key) {
   if (key == KEY_BACKSPACE) {
     if (_compose_len > 0) {
       _compose[--_compose_len] = 0;
+      return true;
+    }
+    if (_reply_prefix[0] && _screen == DScreen::CHAT) {   // nothing typed: stop replying
+      _reply_prefix[0] = 0;
       return true;
     }
     return false;
@@ -1485,6 +1729,18 @@ void UITask::openActions() {
       }
     }
   }
+  {
+    // react and reply, as the app (not to DM requests or other control posts)
+    char name[32];
+    const char *sender, *body;
+    messageWords(m, &sender, &body, name, sizeof(name));
+    KissReaction r;
+    bool control = parseControl(body, REQ_PREFIX, REQ_KEY, name, sizeof(name)) || parseControl(body, ACC_PREFIX, ACC_KEY, name, sizeof(name));
+    if (!control && !kissParseReaction(body, &r)) {
+      if (m.sent_ts) _actions[_num_actions++] = ACT_REACT;   // the hash needs the sender's timestamp
+      _actions[_num_actions++] = ACT_REPLY;
+    }
+  }
   if (m.status == MSG_OUT_FAILED && c.type == DChatType::DIRECT) _actions[_num_actions++] = ACT_RESEND;
   if (m.status == MSG_IN) {
     const char* from = c.name;
@@ -1500,7 +1756,22 @@ void UITask::openActions() {
 void UITask::runAction(uint8_t act) {
   _screen = DScreen::CHAT;
   DChat& c = _chats[_chat];
+  if (act >= ACT_EMOJI0 && act < ACT_EMOJI0 + 6) {
+    sendReaction(act - ACT_EMOJI0);
+    return;
+  }
   switch (act) {
+    case ACT_REACT:   // the app's six quick reactions
+      _react_to = _msgs[_sel_msg].id;
+      _num_actions = 0;
+      for (int i = 0; i < 6; i++) _actions[_num_actions++] = ACT_EMOJI0 + i;
+      _actions[_num_actions++] = ACT_CANCEL;
+      _action_sel = 0;
+      _screen = DScreen::ACTIONS;
+      return;
+    case ACT_REPLY:
+      startReply(_msgs[_sel_msg]);
+      break;
     case ACT_DM:
       askDM(_action_name, c.ch_idx);
       break;
@@ -1703,6 +1974,9 @@ void UITask::tapAt(int x, int y) {
     case HIT_SEND:
       _sel_msg = -1;
       sendCompose();
+      break;
+    case HIT_REPLY_CANCEL:
+      _reply_prefix[0] = 0;
       break;
     case HIT_CHAT_ROW: {
       int order[DECK_MAX_CHATS];
@@ -2533,6 +2807,14 @@ void UITask::describeMessage(const DMsg& m, bool channel, char* sender, char* bo
       } else {
         kissReactionText(r, _node_prefs->node_name, line, sizeof(line));
       }
+      if (r.index >= 0) {   // the picture rather than its name
+        char* at = strstr(line, r.emoji);
+        if (at) {
+          char rest[96];
+          StrHelper::strncpy(rest, at + strlen(r.emoji), sizeof(rest));
+          snprintf(at, sizeof(line) - (at - line), "%s%s", KISS_EMOJI[r.index].utf8, rest);
+        }
+      }
       sender[0] = 0;
       if (channel && m.status == MSG_IN && wsender) toAscii(sender, wsender, 32);
       toAscii(body, line, body_size);
@@ -2611,7 +2893,9 @@ int UITask::messageHeight(const DMsg& m, bool channel) {
   describeMessage(m, channel, sender, body, sizeof(body), &italic, extra);
   char lines[10][64];
   int n = wrapText(italic ? FONT_ITALIC : FONT, body, BUBBLE_MAX, lines, 10);
-  return PAD_Y + (sender[0] ? NAME_H : 0) + n * LINE_H + (extra[0] ? NAME_H : 0) + META_H + PAD_Y - 2;
+  char reacts[80];
+  reactionSummary(m, reacts, sizeof(reacts));
+  return (reacts[0] ? REACT_H : 0) + PAD_Y + (sender[0] ? NAME_H : 0) + n * LINE_H + (extra[0] ? NAME_H : 0) + META_H + PAD_Y - 2;
 }
 
 void UITask::drawMessage(const DMsg& m, bool channel, int y_bottom, bool selected) {
@@ -2622,6 +2906,10 @@ void UITask::drawMessage(const DMsg& m, bool channel, int y_bottom, bool selecte
   char lines[10][64];
   int n = wrapText(f, body, BUBBLE_MAX, lines, 10);
   bool own = m.status != MSG_IN;
+  char reacts[80];
+  reactionSummary(m, reacts, sizeof(reacts));
+  int msg_bottom = y_bottom;   // the bubble sits above its reactions
+  if (reacts[0]) y_bottom -= REACT_H;
 
   char meta[16];
   formatTime(m.ts, meta, true);
@@ -2681,10 +2969,34 @@ void UITask::drawMessage(const DMsg& m, bool channel, int y_bottom, bool selecte
   drawText(G, FONT_SMALL, mx, ty + 1, m.status == MSG_OUT_FAILED ? C_ERROR : C_MUTED, meta);
   int tx = mx + textWidth(FONT_SMALL, meta) + 4;
   for (int t = 0; t < ticks; t++) drawTick(G, tx + t * 5, ty + 2, ticks == 2 ? C_PRIMARY : C_MUTED);
+
+  if (reacts[0]) {   // the app's reaction chips, as words: overlapping the bubble's lower edge
+    char buf[80];
+    ellipsize(FONT_SMALL, reacts, DECK_W - 60, buf, sizeof(buf));
+    int pw = textWidth(FONT_SMALL, buf) + 14;
+    int px = own ? x + w - pw - 4 : x + 4;
+    if (px < 2) px = 2;
+    int py = msg_bottom - REACT_H - 2;
+    G->fillRoundRect(px, py, pw, REACT_H, REACT_H / 2, C_SEC_CONT);
+    G->drawRoundRect(px, py, pw, REACT_H, REACT_H / 2, bg);
+    drawText(G, FONT_SMALL, px + 7, py + 6, C_TEXT, buf);
+  }
 }
 
 void UITask::drawCompose(const char* placeholder) {
   int y = DECK_H - COMPOSE_H;
+  if (_reply_prefix[0] && _screen == DScreen::CHAT) {   // as the app: what you're replying to, with an X
+    int ry = y - REPLY_H;
+    G->fillRect(0, ry, DECK_W, REPLY_H, C_SURFACE);
+    G->fillRect(6, ry + 4, 2, REPLY_H - 8, C_PRIMARY);
+    char line[64], buf[64];
+    snprintf(line, sizeof(line), "Replying to %s", _reply_label);
+    ellipsize(FONT_SMALL, line, DECK_W - 44, buf, sizeof(buf));
+    drawText(G, FONT_SMALL, 14, ry + 6, C_MUTED, buf);
+    G->drawLine(DECK_W - 20, ry + 6, DECK_W - 12, ry + 14, C_MUTED);
+    G->drawLine(DECK_W - 12, ry + 6, DECK_W - 20, ry + 14, C_MUTED);
+    addHit(DECK_W - 32, ry, 32, REPLY_H, HIT_REPLY_CANCEL, 0);
+  }
   G->fillRect(0, y, DECK_W, COMPOSE_H, C_BG);
   bool typing = _compose_len > 0;
   G->drawRoundRect(4, y + 3, 280, 26, 13, typing ? C_PRIMARY : C_OUTLINE);
@@ -2791,7 +3103,7 @@ void UITask::drawChat() {
   }
   DChat& c = _chats[_chat];
   bool channel = c.type == DChatType::CHANNEL;
-  const int area_top = BAR_H, area_bottom = DECK_H - COMPOSE_H;
+  const int area_top = BAR_H, area_bottom = DECK_H - COMPOSE_H - (_reply_prefix[0] ? REPLY_H : 0);
 
   int slots[DECK_MAX_MSGS];
   int count = chatMessages(_chat, slots, DECK_MAX_MSGS);
@@ -2855,18 +3167,25 @@ void UITask::drawChat() {
 void UITask::drawActions() {
   drawChat();   // the app's popup, over the dimmed thread
   for (int y = 0; y < DECK_H; y += 2) G->drawFastHLine(0, y, DECK_W, C_BG);   // dim
-  static const char* LABELS[] = { "Message privately", "Accept DM request", "Mention", "Resend", "Join channel", "Cancel" };
-  int h = 12 + _num_actions * 30;
+  static const char* LABELS[] = { "Message privately", "Accept DM request", "Mention", "Resend", "Join channel", "Cancel", "React", "Reply" };
+  static const char* EMOJI_LABELS[] = { "Thumbs up", "Heart", "Laughing", "Party", "Clapping", "Fire" };
+  const int RH = _num_actions > 7 ? 27 : 30;
+  int h = 12 + _num_actions * RH;
   int w = 220, x = (DECK_W - w) / 2, y = (DECK_H - h) / 2;
   G->fillRoundRect(x, y, w, h, 14, C_SURFACE);
   G->drawRoundRect(x, y, w, h, 14, C_OUTLINE_VAR);
   for (int i = 0; i < _num_actions; i++) {
-    int ry = y + 6 + i * 30;
+    int ry = y + 6 + i * RH;
     bool sel = i == _action_sel;
-    addHit(x, ry, w, 30, HIT_ACTION, i);
-    if (sel) G->fillRoundRect(x + 6, ry, w - 12, 28, 8, C_SEC_CONT);
+    addHit(x, ry, w, RH, HIT_ACTION, i);
+    if (sel) G->fillRoundRect(x + 6, ry, w - 12, RH - 2, 8, C_SEC_CONT);
     char label[48];
-    if (_actions[i] == ACT_DM) snprintf(label, sizeof(label), "Message %s privately", _action_name);
+    if (_actions[i] >= ACT_EMOJI0) {
+      char utf8[48];
+      snprintf(utf8, sizeof(utf8), "%s  %s", KISS_EMOJI[_actions[i] - ACT_EMOJI0].utf8, EMOJI_LABELS[_actions[i] - ACT_EMOJI0]);
+      toAscii(label, utf8, sizeof(label));
+    }
+    else if (_actions[i] == ACT_DM) snprintf(label, sizeof(label), "Message %s privately", _action_name);
     else if (_actions[i] == ACT_JOIN) snprintf(label, sizeof(label), "Join %s", _join_name);
     else StrHelper::strncpy(label, LABELS[_actions[i]], sizeof(label));
     char buf[48];
