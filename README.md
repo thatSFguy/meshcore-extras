@@ -370,6 +370,10 @@ type messages on its OLED, no phone needed. It runs the MeshCore companion
 firmware with its own on-device interface (`ui-kiss`) and no Bluetooth; the
 phone app can still connect over a USB-OTG cable.
 
+**Build your own:** the 3D-printable case and build for this device (T-LoRa,
+CardKB and piezo buzzer) are on Cults3D:
+[K.I.S.S. QWERTY messenger for T-LoRa, CardKB and piezo buzzer](https://cults3d.com/en/3d-model/gadget/k-i-s-s-meshtastic-qwerty-messenger-for-t-lora-cardkb-and-piezo-buzzer).
+
 **Wiring**
 
 | Part | Connection |
