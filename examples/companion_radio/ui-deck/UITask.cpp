@@ -310,6 +310,16 @@ static void avatarGlyph(const char* name, char* out) {
   strcpy(out, "?");
 }
 
+// Darken everything drawn so far to 40%, behind a popup or dialog.
+static void dimScreen(GFXcanvas16* g) {
+  uint16_t* buf = g->getBuffer();
+  for (int i = 0, n = g->width() * g->height(); i < n; i++) {
+    uint16_t c = buf[i];
+    uint16_t r = ((c >> 11) & 31) * 2 / 5, g = ((c >> 5) & 63) * 2 / 5, b = (c & 31) * 2 / 5;
+    buf[i] = (r << 11) | (g << 5) | b;
+  }
+}
+
 static void drawTick(GFXcanvas16* g, int x, int y, uint16_t c) {   // 7x6 check mark
   g->drawLine(x, y + 3, x + 2, y + 5, c);
   g->drawLine(x + 2, y + 5, x + 6, y + 0, c);
@@ -1938,8 +1948,36 @@ void UITask::handleTouch(int event) {
   if (was_off) return;   // the first touch only wakes the screen
   if (event == TOUCH_TAP) tapAt(_touch.x, _touch.y);
   else if (event == TOUCH_DRAG) dragBy(_touch.dy);
+#ifdef DECK_SCREENSHOT
+  else if (event == TOUCH_MULTI) _shot_pending = true;   // two-finger tap
+#endif
   _dirty = true;
 }
+
+#ifdef DECK_SCREENSHOT
+// Capture builds only (-D DECK_SCREENSHOT): the frame on screen, raw, over
+// USB, framed by text lines; tools/deck_screenshot.py saves it as a PNG.
+// It shares the USB serial port with the companion protocol, so this is for
+// screenshots with nothing else connected, never for normal firmware.
+void UITask::sendScreenshot() {
+  GFXcanvas16* g = ((DeckDisplay*)_display)->gfx();
+  if (g == NULL) return;
+  Serial.printf("\nDECKSHOT %d %d\n", g->width(), g->height());
+  const uint8_t* p = (const uint8_t*)g->getBuffer();
+  size_t left = (size_t)g->width() * g->height() * 2;
+  while (left > 0) {
+    size_t n = left > 4096 ? 4096 : left;
+    Serial.write(p, n);
+    p += n;
+    left -= n;
+  }
+  Serial.print("\nDECKSHOT END\n");
+  Serial.flush();
+  showAlert("Screenshot saved", 1200);   // after the capture, so it isn't in it
+  static const DeckNote shutter[] = { { 2637, 25 }, { 0, 35 }, { 1976, 40 } };   // a camera-like click
+  _sound.play(shutter, 3);   // even with sound off: it's the only sign the shot was taken
+}
+#endif
 
 void UITask::tapAt(int x, int y) {
   const DHit* hit = NULL;
@@ -3166,7 +3204,7 @@ void UITask::drawChat() {
 
 void UITask::drawActions() {
   drawChat();   // the app's popup, over the dimmed thread
-  for (int y = 0; y < DECK_H; y += 2) G->drawFastHLine(0, y, DECK_W, C_BG);   // dim
+  dimScreen(G);
   static const char* LABELS[] = { "Message privately", "Accept DM request", "Mention", "Resend", "Join channel", "Cancel", "React", "Reply" };
   static const char* EMOJI_LABELS[] = { "Thumbs up", "Heart", "Laughing", "Party", "Clapping", "Fire" };
   const int RH = _num_actions > 7 ? 27 : 30;
@@ -3195,7 +3233,6 @@ void UITask::drawActions() {
 }
 
 void UITask::drawSettings() {
-  drawAppBar("Settings", NULL, false, -1);
   const int top = BAR_H, bottom = DECK_H - NAV_H;
   // keep the selected row in view
   int ys[NUM_SET_ROWS], total = 0;
@@ -3275,6 +3312,7 @@ void UITask::drawSettings() {
     drawText(G, FONT_SMALL, 14, y + 22, sel && _set_edit ? C_PRIMARY : C_MUTED, buf);
   }
   drawNav();
+  drawAppBar("Settings", NULL, false, -1);   // last: rows scrolled up go under it
 }
 
 void UITask::drawName() {
@@ -3341,7 +3379,7 @@ void UITask::drawPrompt() {
   else if (behind == DScreen::SHARE_PICK) drawSharePick();
   else drawChats();
   _screen = DScreen::PROMPT;
-  for (int y = 0; y < DECK_H; y += 2) G->drawFastHLine(0, y, DECK_W, C_BG);
+  dimScreen(G);
 
   char title[96], body[200];
   const char *no_label, *yes_label;
@@ -3452,6 +3490,12 @@ void UITask::render() {
   }
   drawToast();
   _display->push();
+#ifdef DECK_SCREENSHOT
+  if (_shot_pending) {
+    _shot_pending = false;
+    sendScreenshot();
+  }
+#endif
 }
 
 // ---------------------------------------------------------------- loop

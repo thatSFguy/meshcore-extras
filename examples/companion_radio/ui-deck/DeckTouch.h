@@ -15,13 +15,13 @@
 #define TOUCH_POLL_MS   20
 #define TOUCH_SLOP      10        // px of movement before a touch becomes a drag
 
-enum DeckTouchEvent { TOUCH_NONE, TOUCH_TAP, TOUCH_DRAG };
+enum DeckTouchEvent { TOUCH_NONE, TOUCH_TAP, TOUCH_DRAG, TOUCH_MULTI };   // MULTI: two or more fingers
 
 class DeckTouch {
   TwoWire* _wire = NULL;
   uint8_t _addr = 0;
   unsigned long _next_poll = 0, _next_probe = 0;
-  bool _down = false, _dragging = false;
+  bool _down = false, _dragging = false, _multi = false;
   int _start_x = 0, _start_y = 0, _last_y = 0;
 
   bool readReg(uint16_t reg, uint8_t* buf, uint8_t len) {
@@ -92,6 +92,14 @@ public:
     if (points > 0) readReg(GT911_POINT1, p, 4);
     writeReg(GT911_STATUS, 0);
 
+    if (points >= 2) {   // reported once per touch; the touch then ends as nothing
+      bool first = !_multi;
+      _multi = true;
+      _down = true;
+      _dragging = true;
+      return first ? TOUCH_MULTI : TOUCH_NONE;
+    }
+    if (points > 0 && _multi) return TOUCH_NONE;   // a finger of a two-finger touch, still down
     if (points > 0) {
       raw_x = p[0] | (p[1] << 8);
       raw_y = p[2] | (p[3] << 8);
@@ -115,6 +123,7 @@ public:
     // released
     bool was_tap = _down && !_dragging;
     _down = false;
+    _multi = false;
     if (was_tap) {
       x = _start_x; y = _start_y;
       return TOUCH_TAP;

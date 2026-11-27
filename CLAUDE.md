@@ -90,6 +90,12 @@ bridges that one hop. A moving node must not act like a normal repeater, so:
   `tools/gen_deck_emoji.py`; `toAscii()` turns them into 3-byte markers that
   `textWidth()`/`wrapText()`/`drawText()` draw as pictures. Matched reactions
   show as chips on their message; React and Reply send the app's formats.
+  Screenshots (README, `docs/images/`): a capture build
+  (`PLATFORMIO_BUILD_FLAGS="-D DECK_SCREENSHOT"`) sends the screen over USB on
+  a two-finger tap (with a click and a toast); `tools/deck_screenshot.py
+  <port> <dir>` saves PNGs. Never in released firmware: it shares the USB
+  port with the companion protocol. Stage shots on your own devices; the
+  repo is public.
 - Every board's `<board>_personal_relay` env mirrors its `_repeater` env with
   only the example and `ADVERT_NAME` changed.
 

@@ -174,6 +174,10 @@ class UITask : public AbstractUITask {
   char _reply_prefix[80];         // "> Sender: quote\n", sent before the compose text; "" = not replying
   char _reply_label[48];          // shown above the composer
   uint16_t _react_to = 0;         // the message the emoji choices are for
+#ifdef DECK_SCREENSHOT
+  bool _shot_pending = false;     // capture builds: send the next frame over USB
+  void sendScreenshot();
+#endif
   bool isAttachedReaction(const DMsg& m);
   bool reactionArrived(DMsg& m);
   void reactionSummary(const DMsg& t, char* out, int out_size);
