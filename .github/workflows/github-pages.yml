@@ -32,11 +32,12 @@ jobs:
         run: |
           FIRMWARE_VERSION=$(sed -n 's/^#define FIRMWARE_VERSION *"\(.*\)".*/\1/p' examples/companion_radio/MyMesh.h | head -1)
           export FIRMWARE_VERSION
+          mkdir -p site/firmware
+          # build.sh empties out/ on every run: copy each image before the next build
           for env in LilyGo_TLora_V2_1_1_6_kiss_messenger LilyGo_TDeck_kiss_messenger; do
             /usr/bin/env bash build.sh build-firmware "$env"
+            cp out/"$env"-*-merged.bin site/firmware/
           done
-          mkdir -p site/firmware
-          cp out/*_kiss_messenger-*-merged.bin site/firmware/
 
       - name: Download personal relay firmware
         env:
