@@ -1,6 +1,7 @@
 #include "UITask.h"
 #include <helpers/TxtDataHelpers.h>
 #include <helpers/AdvertDataHelpers.h>
+#include <SPIFFS.h>
 #include "../MyMesh.h"
 #include "target.h"
 
@@ -17,8 +18,8 @@
 #define C_LIGHT     1
 
 
-static const char* MENU_ITEMS[] = { "Send flood advert", "Send zero-hop advert", "Set name", "Sound", "Vibrate", "About" };
-#define MENU_COUNT  6
+static const char* MENU_ITEMS[] = { "Send flood advert", "Send zero-hop advert", "Set name", "Sound", "Vibrate", "Keep msgs", "About" };
+#define MENU_COUNT  7
 
 // ---------------------------------------------------------------- setup
 
@@ -53,6 +54,8 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 #endif
 
   rebuildChats();
+  loadKeepPref();
+  if (_keep_msgs) loadMessages();
   if (_display) _display->turnOn();
   _auto_off = millis() + KISS_AUTO_OFF_MILLIS;
 
@@ -72,6 +75,134 @@ bool UITask::isDefaultName() const {
   char key_hex[9];
   mesh::Utils::toHex(key_hex, the_mesh.self_id.pub_key, 4);
   return strcasecmp(n, key_hex) == 0;
+}
+
+// ---------------------------------------------------------------- saved messages
+//
+// With "Keep msgs" on (the default), the message ring is written to
+// /kiss_msgs at most every 15 s after a change (a power cut loses at most
+// that much) and read back at boot. Each message is stored against its
+// chat's identity (channel key or contact key), not a list position, so
+// channels and contacts can change in between. Plain text in flash, like the
+// companion's own files. Turning it off clears all messages.
+
+#define KEEP_PREF_PATH  "/kiss_ui"
+#define STORE_PATH      "/kiss_msgs"
+#define STORE_MAGIC     0x314D534BUL   // "KSM1"
+#define STORE_DELAY_MS  15000
+
+struct KStoredMsgHead {
+  uint8_t type;            // KChatType
+  uint8_t status;
+  uint8_t text_len;
+  uint8_t reserved;
+  uint8_t key[PUB_KEY_SIZE];   // channel: its 16-byte secret (zero padded); DM: the contact's key
+};
+
+void UITask::loadKeepPref() {
+  _keep_msgs = true;   // default on; the file only exists once it's been changed
+  File f = SPIFFS.open(KEEP_PREF_PATH, "r");
+  if (!f) return;
+  uint8_t v = 1;
+  if (f.read(&v, 1) == 1) _keep_msgs = v != 0;
+  f.close();
+}
+
+void UITask::saveKeepPref() {
+  File f = SPIFFS.open(KEEP_PREF_PATH, "w");
+  if (!f) return;
+  uint8_t v = _keep_msgs ? 1 : 0;
+  f.write(&v, 1);
+  f.close();
+}
+
+void UITask::messagesChanged() {
+  if (!_keep_msgs) return;
+  if (!_store_dirty) _store_due = millis() + STORE_DELAY_MS;
+  _store_dirty = true;
+}
+
+void UITask::saveMessages() {
+  _store_dirty = false;
+  if (!_keep_msgs) return;
+  File f = SPIFFS.open(STORE_PATH, "w");
+  if (!f) return;
+  uint32_t magic = STORE_MAGIC;
+  f.write((const uint8_t*)&magic, sizeof(magic));
+  for (int n = KISS_MAX_MSGS; n >= 1; n--) {   // oldest first
+    KMsg& m = _msgs[(_msg_head - n + KISS_MAX_MSGS) % KISS_MAX_MSGS];
+    if (!m.id || m.chat < 0 || m.chat >= _num_chats) continue;
+    KChat& c = _chats[m.chat];
+    KStoredMsgHead h;
+    memset(&h, 0, sizeof(h));
+    h.type = (uint8_t)c.type;
+    h.status = m.status;
+    size_t len = strlen(m.text);
+    h.text_len = len > 255 ? 255 : len;
+    if (c.type == KChatType::CHANNEL) {
+      ChannelDetails cd;
+      if (!the_mesh.getChannel(c.ch_idx, cd)) continue;
+      memcpy(h.key, cd.channel.secret, 16);
+    } else {
+      memcpy(h.key, c.pub_key, PUB_KEY_SIZE);
+    }
+    f.write((const uint8_t*)&h, sizeof(h));
+    f.write((const uint8_t*)m.text, h.text_len);
+  }
+  f.close();
+}
+
+void UITask::loadMessages() {
+  File f = SPIFFS.open(STORE_PATH, "r");
+  if (!f) return;
+  uint32_t magic = 0;
+  if (f.read((uint8_t*)&magic, sizeof(magic)) != sizeof(magic) || magic != STORE_MAGIC) {
+    f.close();
+    return;
+  }
+  KStoredMsgHead h;
+  uint32_t order = 1;   // restored chats keep their relative order, older than anything new
+  while (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h)) {
+    char text[256];
+    if (f.read((uint8_t*)text, h.text_len) != h.text_len) break;
+    text[h.text_len] = 0;
+    int chat = -1;
+    if (h.type == (uint8_t)KChatType::CHANNEL) {
+      mesh::GroupChannel probe;
+      memset(&probe, 0, sizeof(probe));
+      memcpy(probe.secret, h.key, 16);
+      int ch = the_mesh.findChannelIdx(probe);
+      if (ch >= 0) chat = findChannelChat(ch);
+    } else {
+      chat = findDirectChat(h.key);
+    }
+    if (chat < 0) continue;   // that channel or contact is gone
+    KMsg* m = &_msgs[_msg_head];
+    _msg_head = (_msg_head + 1) % KISS_MAX_MSGS;
+    m->id = _next_msg_id++;
+    if (_next_msg_id == 0) _next_msg_id = 1;
+    m->chat = chat;
+    // a DM that was still being sent when we stopped didn't get through
+    m->status = h.status == MSG_OUT_PENDING ? MSG_OUT_FAILED : h.status;
+    StrHelper::strncpy(m->text, text, sizeof(m->text));
+    _chats[chat].last_activity = order++;
+  }
+  f.close();
+  _dirty = true;
+}
+
+void UITask::clearMessages() {
+  memset(_msgs, 0, sizeof(_msgs));
+  _msg_head = 0;
+  _scroll = 0;
+  memset(&_out, 0, sizeof(_out));
+  for (int i = 0; i < _num_chats; i++) {
+    _chats[i].unread = 0;
+    _chats[i].last_activity = 0;
+  }
+  SPIFFS.remove(STORE_PATH);
+  _store_dirty = false;
+  showAlert("Messages cleared", 1500);
 }
 
 // ---------------------------------------------------------------- chats + messages
@@ -142,6 +273,7 @@ KMsg* UITask::addMsg(int chat, uint8_t status, const char* text) {
   m->status = status;
   StrHelper::strncpy(m->text, text, sizeof(m->text));
   _dirty = true;
+  messagesChanged();
   return m;
 }
 
@@ -233,6 +365,7 @@ void UITask::sendDMAttempt() {
     m->status = MSG_OUT_FAILED;
     _out.active = false;
     _dirty = true;
+    messagesChanged();
     return;
   }
   _out.acks[_out.attempt] = ack;
@@ -249,6 +382,7 @@ void UITask::checkOutgoing() {
     if (m) m->status = MSG_OUT_FAILED;
     _out.active = false;
     _dirty = true;
+    messagesChanged();
   }
 }
 
@@ -260,6 +394,7 @@ void UITask::onACKRecv(uint32_t ack_crc) {
       if (m) m->status = MSG_OUT_DELIVERED;
       _out.active = false;
       _dirty = true;
+      messagesChanged();
       notify(UIEventType::ack);
       return;
     }
@@ -444,6 +579,41 @@ void UITask::handleChannelControl(const char* sender, const char* body, uint8_t 
   }
 }
 
+// ---------------------------------------------------------------- duplicates
+//
+// Copies of one message, dropped as the phone app drops them. A DM's retries
+// are deliberately distinct packets (each carries its attempt number), so the
+// mesh doesn't filter them and the firmware hands every copy up; they share
+// the sender's key, the sender's timestamp and the text. A channel post can
+// also come round again after the mesh's seen-table has forgotten it. The UI
+// isn't given a channel post's timestamp, so those match on channel + exact
+// "sender: text" within a few minutes.
+#define DUP_SLOTS            32
+#define DUP_DM_MILLIS        (60UL * 60 * 1000)
+#define DUP_CHANNEL_MILLIS   (5UL * 60 * 1000)
+
+struct SeenMsg { uint32_t key; unsigned long at; };
+static SeenMsg s_seen[DUP_SLOTS];
+static int s_seen_head = 0;
+
+static uint32_t fnv1a(uint32_t h, const void* data, size_t len) {
+  const uint8_t* p = (const uint8_t*)data;
+  for (size_t i = 0; i < len; i++) { h ^= p[i]; h *= 16777619UL; }
+  return h;
+}
+
+// true if this key was seen within window_ms; otherwise remembers it
+static bool seenRecently(uint32_t key, unsigned long window_ms) {
+  unsigned long now = millis();
+  for (int i = 0; i < DUP_SLOTS; i++) {
+    if (s_seen[i].key == key && s_seen[i].at && now - s_seen[i].at < window_ms) return true;
+  }
+  s_seen[s_seen_head].key = key;
+  s_seen[s_seen_head].at = now | 1;
+  s_seen_head = (s_seen_head + 1) % DUP_SLOTS;
+  return false;
+}
+
 // ---------------------------------------------------------------- mesh events
 
 // No app or GPS to set the time, so take it from the mesh, but never from one
@@ -508,6 +678,10 @@ void UITask::syncClock(const char* source, uint32_t their_time) {
 
 void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t txt_type, uint32_t sender_timestamp, const char* text) {
   if (!(txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_SIGNED_PLAIN)) return;
+  uint32_t key = fnv1a(2166136261UL, from.id.pub_key, PUB_KEY_SIZE);
+  key = fnv1a(key, &sender_timestamp, sizeof(sender_timestamp));
+  key = fnv1a(key, text, strlen(text));
+  if (seenRecently(key, DUP_DM_MILLIS)) return;   // a retry of one we already have
   syncClock(from.name, sender_timestamp);
   int chat = findDirectChat(from.id.pub_key);
   if (chat < 0) {
@@ -524,6 +698,9 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
 
 void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_details, const char* text) {
   int ch_idx = the_mesh.findChannelIdx(channel_details.channel);
+  uint32_t key = fnv1a(2166136261UL ^ 0x5A, &ch_idx, sizeof(ch_idx));
+  key = fnv1a(key, text, strlen(text));
+  if (seenRecently(key, DUP_CHANNEL_MILLIS)) return;   // the same post again
   int chat = ch_idx >= 0 ? findChannelChat(ch_idx) : -1;
   if (chat < 0) {
     rebuildChats();
@@ -764,6 +941,16 @@ void UITask::keyMenu(int key) {
         if (!_node_prefs->vibe_quiet) vibrate(1);   // a sample
         break;
       case 5:
+        if (_keep_msgs) {
+          showPrompt(KPrompt::KEEP_OFF, "", 0);   // turning it off clears everything: ask first
+        } else {
+          _keep_msgs = true;
+          saveKeepPref();
+          saveMessages();
+          showAlert("Msgs kept on restart", 1500);
+        }
+        break;
+      case 6:
         _screen = KScreen::ABOUT;
         break;
     }
@@ -796,6 +983,11 @@ void UITask::keyPrompt(int key) {
   _screen = _prompt_return;
   if (yes && p == KPrompt::CONFIRM_REQUEST) requestDM(_prompt_name, _prompt_ch_idx);
   if (yes && p == KPrompt::INCOMING_REQUEST) acceptDM();   // decline posts nothing, as the app
+  if (yes && p == KPrompt::KEEP_OFF) {
+    _keep_msgs = false;
+    saveKeepPref();
+    clearMessages();
+  }
 }
 
 void UITask::handleKey(int key) {
@@ -1002,6 +1194,7 @@ void UITask::drawMenu() {
     char line[32];
     if (r == 3) snprintf(line, sizeof(line), "Sound: %s", _node_prefs->buzzer_quiet ? "off" : "on");
     else if (r == 4) snprintf(line, sizeof(line), "Vibrate: %s", _node_prefs->vibe_quiet ? "off" : "on");
+    else if (r == 5) snprintf(line, sizeof(line), "Keep msgs: %s", _keep_msgs ? "on" : "off");
     else StrHelper::strncpy(line, MENU_ITEMS[r], sizeof(line));
     drawRow(_display, ROW_H + 1 + r * ROW_H, line, r == _menu_sel);
   }
@@ -1036,10 +1229,13 @@ void UITask::drawAbout() {
 }
 
 void UITask::drawPrompt() {
-  const char* title = _prompt == KPrompt::INCOMING_REQUEST ? "DM request" : "Message privately?";
+  const char* title = _prompt == KPrompt::INCOMING_REQUEST ? "DM request"
+                    : _prompt == KPrompt::KEEP_OFF ? "Stop keeping msgs?" : "Message privately?";
   drawTitle(title, NULL);
-  char line[48];
-  if (_prompt == KPrompt::INCOMING_REQUEST) {
+  char line[64];
+  if (_prompt == KPrompt::KEEP_OFF) {
+    strcpy(line, "All messages are cleared. New ones are gone after a restart.");
+  } else if (_prompt == KPrompt::INCOMING_REQUEST) {
     char hex[9];
     toLowerHex(hex, _prompt_key, 4);
     snprintf(line, sizeof(line), "%s wants to message you privately. Key %s", _prompt_name, hex);
@@ -1104,6 +1300,7 @@ void UITask::loop() {
   }
 
   checkOutgoing();
+  if (_store_dirty && (long)(now - _store_due) >= 0) saveMessages();
 
   // channels/contacts can change over USB (app or the web config page)
   if (_screen == KScreen::LIST && (long)(now - _next_rebuild) >= 0) {
