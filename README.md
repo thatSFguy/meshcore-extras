@@ -371,6 +371,21 @@ modelled on the phone app: chat list with avatars, message bubbles with
 delivery ticks (✓ sent, ✓✓ delivered, ✗ failed), and the app's dark theme and
 wording.
 
+<table>
+  <tr>
+    <td><img src="docs/images/tdeck-chats.png" width="320" alt="Chat list"><br>Chat list</td>
+    <td><img src="docs/images/tdeck-dm-reply.png" width="320" alt="A DM with a reply, emoji and reactions"><br>Replies, emoji and reactions</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/tdeck-channel-reaction.png" width="320" alt="A private channel with a reaction"><br>A private channel</td>
+    <td><img src="docs/images/tdeck-react.png" width="320" alt="Reacting to a message"><br>React</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/tdeck-region.png" width="320" alt="Choosing a region"><br>Region presets</td>
+    <td><img src="docs/images/tdeck-channels.png" width="320" alt="Channels"><br>Channels</td>
+  </tr>
+</table>
+
 - **Install:** [install page](https://thatsfguy.github.io/meshcore-extras/program.html)
   → *K.I.S.S. Messenger* → *LilyGo TDeck*, or build target
   `LilyGo_TDeck_kiss_messenger`.
