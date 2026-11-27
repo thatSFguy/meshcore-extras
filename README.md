@@ -1,27 +1,33 @@
-# MeshCore EdgeRelay
+# MeshCore Extras
 
-A personal, car-based MeshCore edge relay. This is a **fork** of the official
-[MeshCore](https://github.com/meshcore-dev/MeshCore) repository, modified so a
-repeater installed in a parked car can serve its owner's companion devices
-without burdening the wider mesh.
+The official [MeshCore](https://github.com/meshcore-dev/MeshCore) firmware plus
+extra firmwares, devices and features, kept in step with upstream releases.
+This is a **fork**: everything stock builds and behaves as upstream, and the
+additions live alongside it.
 
-The fork also carries the **K.I.S.S. Messenger**: a standalone MeshCore
-messenger for a LilyGo T-LoRa V2.1-1.6 with a CardKB keyboard, so you can read
-and type messages without a phone (see [K.I.S.S. Messenger](#kiss-messenger)).
+What it adds:
 
-**Install or configure either one from the browser:
-https://thatsfguy.github.io/MeshCore-EdgeRelay/**
+- **Personal Relay** (`examples/personal_relay`): a car-based directional edge
+  relay, so a repeater in a parked car can serve its owner's companion devices
+  without burdening the wider mesh (see [Why the Personal Relay](#why-the-personal-relay)).
+- **K.I.S.S. Messenger**: a standalone MeshCore messenger for a LilyGo
+  T-LoRa V2.1-1.6 with a CardKB keyboard, so you can read and type messages
+  without a phone (see [K.I.S.S. Messenger](#kiss-messenger)).
+- **GPS companion** for the LilyGo T-LoRa V2.1-1.6 with an external GPS module.
+
+**Install or configure from the browser:
+https://thatsfguy.github.io/meshcore-extras/**
 
 **Upstream:** https://github.com/meshcore-dev/MeshCore — all core protocol,
 radio, and platform code is theirs, under the MIT license (see `LICENSE`).
 
-## Why this fork exists
+## Why the Personal Relay
 
 A companion node inside an office building can't always reach the fixed
 repeater infrastructure directly. A relay on a car in the parking lot bridges
 that gap — but a moving relay that behaves like a normal repeater is a bad
 mesh citizen: it would learn and advertise paths that go stale, forward other
-people's traffic, and add airtime load. So this fork adds a new
+people's traffic, and add airtime load. So this repo adds a new
 `examples/personal_relay` firmware — a **directional edge relay** built on the
 stock `simple_repeater` example, which is left untouched:
 
@@ -38,9 +44,9 @@ The project website does it all over USB, no tools to install:
 
 | Page | What it does |
 |---|---|
-| [**Install firmware**](https://thatsfguy.github.io/MeshCore-EdgeRelay/program.html) | Pick Personal Relay or K.I.S.S. Messenger and your board. ESP32 boards flash straight from the browser; nRF52 (RAK4631, T1000-E, …) and RP2040 boards get a `.uf2` to drag onto the board's USB drive; STM32 boards get a `.hex`. |
-| [**Configure relay**](https://thatsfguy.github.io/MeshCore-EdgeRelay/relay.html) | Owners, group channels, echo suppression, home detection, options, name, admin password and radio (with presets), plus a command console. |
-| [**Configure K.I.S.S.**](https://thatsfguy.github.io/MeshCore-EdgeRelay/kiss.html) | Name, radio (with presets), channels, including creating or joining a private channel. Also sets the device clock from your computer. |
+| [**Install firmware**](https://thatsfguy.github.io/meshcore-extras/program.html) | Pick Personal Relay or K.I.S.S. Messenger and your board. ESP32 boards flash straight from the browser; nRF52 (RAK4631, T1000-E, …) and RP2040 boards get a `.uf2` to drag onto the board's USB drive; STM32 boards get a `.hex`. |
+| [**Configure relay**](https://thatsfguy.github.io/meshcore-extras/relay.html) | Owners, group channels, echo suppression, home detection, options, name, admin password and radio (with presets), plus a command console. |
+| [**Configure K.I.S.S.**](https://thatsfguy.github.io/meshcore-extras/kiss.html) | Name, radio (with presets), channels, including creating or joining a private channel. Also sets the device clock from your computer. |
 
 Flashing and configuring need **desktop Chrome or Edge** (Windows, Mac, Linux
 or ChromeOS); phones and Firefox/Safari can't talk to USB devices, but can
@@ -149,13 +155,13 @@ Notes:
 ### 1. Set it up like a normal repeater
 
 Flash the personal relay firmware from the
-[install page](https://thatsfguy.github.io/MeshCore-EdgeRelay/program.html)
+[install page](https://thatsfguy.github.io/meshcore-extras/program.html)
 (or see [Build and flash](#build-and-flash)) and configure it the way you would
 any MeshCore repeater: name, radio settings, admin password, and so on.
 Everything below is the extra edge configuration on top of that.
 
 Every step below can be done on the
-[relay configuration page](https://thatsfguy.github.io/MeshCore-EdgeRelay/relay.html)
+[relay configuration page](https://thatsfguy.github.io/meshcore-extras/relay.html)
 with the relay plugged in by USB. Underneath, it sends the `edge` commands,
 which you can also type yourself over USB serial at 115200 baud (also on the
 ethernet console where enabled). A full command list is in
@@ -337,11 +343,11 @@ phone app can still connect over a USB-OTG cable.
 | Vibration motor | GPIO 13, switched by a 2N2222 (GPIO high = on) |
 | User button | the board's BOOT button (GPIO 0) |
 
-**Install:** [install page](https://thatsfguy.github.io/MeshCore-EdgeRelay/program.html)
+**Install:** [install page](https://thatsfguy.github.io/meshcore-extras/program.html)
 → *K.I.S.S. Messenger*, or build target `LilyGo_TLora_V2_1_1_6_kiss_messenger`.
 Don't flash the GPS companion build to this hardware: it uses GPIO 15/13 for
 the GPS. **Set up:** on first boot it asks for a name. Then use the
-[K.I.S.S. configuration page](https://thatsfguy.github.io/MeshCore-EdgeRelay/kiss.html)
+[K.I.S.S. configuration page](https://thatsfguy.github.io/meshcore-extras/kiss.html)
 for the radio (USA / Canada and EU / UK presets) and channels.
 
 **Using it**
@@ -369,7 +375,7 @@ drag it along. The configuration page also sets it from your computer.
 ## Build and flash
 
 The easiest way is the
-[install page](https://thatsfguy.github.io/MeshCore-EdgeRelay/program.html).
+[install page](https://thatsfguy.github.io/meshcore-extras/program.html).
 To build from source instead, same as upstream. From this directory:
 
 ```bash

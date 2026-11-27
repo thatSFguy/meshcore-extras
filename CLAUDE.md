@@ -1,10 +1,14 @@
 # CLAUDE.md
 
-Fork of upstream MeshCore (https://github.com/meshcore-dev/MeshCore) that adds
-one firmware: `examples/personal_relay`, a **car-based directional edge relay**
-for the owner's own companion devices. It is in daily use and working well, so
+MeshCore Extras (`thatSFguy/meshcore-extras`): a GitHub fork of upstream
+MeshCore (https://github.com/meshcore-dev/MeshCore) carrying
+extra firmwares and devices (see Fork boundaries). The main one is
+`examples/personal_relay`, a **car-based directional edge relay** for the
+owner's own companion devices. It is in daily use and working well, so
 **preserving its behavior is the top priority** for any change, especially
-upstream merges.
+upstream merges. It stays a fork so fixes can be offered upstream, but PRs for
+this repo must target `thatSFguy/meshcore-extras` (`gh` defaults to the parent).
+The old `thatSFguy/MeshCore-EdgeRelay` (forked via pete1450's repo) is archived.
 
 `README.md` is the authoritative spec (packet policy table, `edge` CLI, home
 detection, echo suppression). Read it before changing the relay.
