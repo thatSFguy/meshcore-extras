@@ -63,7 +63,9 @@ bridges that one hop. A moving node must not act like a normal repeater, so:
   this env) in `examples/companion_radio/MyMesh.cpp`.
 - Also fork-only: the K.I.S.S. Messenger (`LilyGo_TLora_V2_1_1_6_kiss_messenger`):
   a standalone on-device chat UI in `examples/companion_radio/ui-kiss/` (CardKB
-  keyboard, OLED, buzzer GPIO 15, vibration GPIO 13, no BLE), plus a few small
+  keyboard, OLED, buzzer GPIO 15, vibration GPIO 13, no BLE; wiring diagram
+  `guides/images/kiss-tlora-wiring.svg` from `tools/gen_kiss_wiring.py`: change
+  it with the pins), plus a few small
   public additions to the companion's `MyMesh`: `floodAdvert()`,
   `persistContacts()`, `persistChannels()` and `lastChannelTimestamp()` (the
   sender timestamp of the channel post being delivered, set in

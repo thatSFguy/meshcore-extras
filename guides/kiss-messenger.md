@@ -6,6 +6,7 @@
 - [Works with the MeshCore phone app](#works-with-the-meshcore-phone-app)
 - [LilyGo T-Deck](#lilygo-t-deck)
 - [LilyGo T-LoRa V2.1-1.6](#lilygo-t-lora-v21-16)
+  - [Wiring](#wiring) and [your own board](#your-own-board)
 
 ## Overview
 
@@ -102,14 +103,51 @@ phone app can still connect over a USB-OTG cable.
 CardKB and piezo buzzer) are on Cults3D:
 [K.I.S.S. QWERTY messenger for T-LoRa, CardKB and piezo buzzer](https://cults3d.com/en/3d-model/gadget/k-i-s-s-meshtastic-qwerty-messenger-for-t-lora-cardkb-and-piezo-buzzer).
 
+<a id="wiring"></a>
 **Wiring**
 
-| Part | Connection |
-|---|---|
-| CardKB | I2C on GPIO 21 (SDA) / 22 (SCL), shared with the OLED; 3.3 V and GND |
-| Piezo buzzer | GPIO 15, switched by a 2N2222 (GPIO high = on) |
-| Vibration motor | GPIO 13, switched by a 2N2222 (GPIO high = on) |
-| User button | the board's BOOT button (GPIO 0) |
+The diagram is generic: an ESP32, an SX1276 LoRa radio, an I2C OLED and a
+CardKB, plus a few small parts. On a T-LoRa V2.1-1.6 the radio, OLED, button,
+battery divider and LED are already on the board, so you only add the CardKB,
+the buzzer and the motor. To use another board, see
+[Your own board](#your-own-board).
+
+<img src="images/kiss-tlora-wiring.svg" alt="Wiring diagram: ESP32 to the LoRa radio, OLED, CardKB, buzzer, vibration motor, button, battery divider and LED">
+
+| Part | Connection (T-LoRa build) | Notes |
+|---|---|---|
+| LoRa radio (SX1276 / RFM95W) | SPI: SCK 5, MOSI 27, MISO 19, NSS 18; RESET 14, DIO0 26, DIO1 33 | Connect the antenna before powering on. |
+| OLED, 128×64 SSD1306 | I2C: SDA 21, SCL 22, address 0x3C | Shares the bus with the CardKB. |
+| M5Stack CardKB | Same I2C bus, address 0x5F; 3.3 V and GND | The bus needs 4.7 kΩ pull-ups to 3.3 V (most OLED boards have them). |
+| Piezo buzzer | GPIO 15 → 1 kΩ → 2N2222 base; buzzer from 3.3 V to the collector | A passive piezo: the firmware plays tunes. High = on. Optional. |
+| Vibration motor | GPIO 13 → 1 kΩ → 2N2222 base; motor from 3.3 V to the collector, 1N4148 across it | The diode's band goes to the supply side. High = on. Optional. |
+| User button | GPIO 0 to GND (the BOOT button) | Turns the screen on or off. |
+| Battery level | GPIO 35, from two equal resistors (100 kΩ) between battery + and GND | The firmware doubles the reading, so the divider must halve the voltage. |
+| TX LED | GPIO 25 → 330 Ω → LED → GND | Lights while transmitting. Optional. |
+
+All parts share GND. The buzzer and motor can run from the battery instead of
+3.3 V; the transistor still switches them from a 3.3 V GPIO.
+
+<a id="your-own-board"></a>
+**Your own board.** Any ESP32 with an SX1276 or RFM95W radio works, with the
+pins changed to match. In `variants/lilygo_tlora_v2_1/platformio.ini`, copy
+the `[LilyGo_TLora_V2_1_1_6]` section under a new name and change its pin
+flags (`P_LORA_*`, `PIN_BOARD_SDA`/`PIN_BOARD_SCL`, `PIN_VBAT_READ`,
+`P_LORA_TX_LED`, `PIN_USER_BTN`). Then copy `[env:LilyGo_TLora_V2_1_1_6_kiss_messenger]`,
+point it at your section, and set `PIN_BUZZER` and `PIN_VIBRATION`. Leave
+either one out if you don't fit that part. Build it with
+`pio run -e <your env name>`.
+
+- If your OLED has a reset pin, set `-D PIN_OLED_RESET=<gpio>`. Otherwise set
+  `-D PIN_OLED_RESET=-1`, because the default (21) would toggle a pin you may
+  be using for something else.
+- Choose output pins carefully. GPIO 6–11 belong to the flash chip, and GPIO
+  34–39 are input only (fine for the battery, not for the buzzer or motor).
+  GPIO 12 must not be pulled high at boot. GPIO 0, 2 and 15 are boot pins:
+  they are fine behind a 1 kΩ resistor to a transistor, but nothing may hold
+  them high or low while the board starts.
+- Another radio chip (SX1262, LLCC68) needs a different radio class and a BUSY
+  pin; copy those flags from a board in `variants/` that uses that chip.
 
 **Install:** [install page](https://thatsfguy.github.io/meshcore-extras/program.html)
 → *K.I.S.S. Messenger*, or build target `LilyGo_TLora_V2_1_1_6_kiss_messenger`.
