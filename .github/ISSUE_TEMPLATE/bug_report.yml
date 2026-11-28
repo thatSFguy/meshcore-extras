@@ -1,0 +1,115 @@
+name: Bug report
+description: Something in the Personal Relay, the K.I.S.S. Messenger, the GPS companion or the website doesn't work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! This repo covers what **MeshCore Extras** adds to MeshCore. For the stock firmware (repeater, room server, stock companion), please report to [upstream MeshCore](https://github.com/meshcore-dev/MeshCore/issues).
+
+        **Before posting, remove anything secret:** channel keys, admin passwords and private keys. This repo is public.
+
+  - type: dropdown
+    id: firmware
+    attributes:
+      label: Which firmware or page?
+      options:
+        - Personal Relay
+        - K.I.S.S. Messenger, LilyGo T-Deck
+        - K.I.S.S. Messenger, LilyGo T-LoRa V2.1-1.6
+        - GPS companion, LilyGo T-LoRa V2.1-1.6
+        - Website, install page
+        - Website, relay configuration page
+        - Website, K.I.S.S. configuration page
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Firmware version
+      description: |
+        Personal Relay: the `ver` command, or the relay configuration page. K.I.S.S. on a T-Deck: Settings → About. K.I.S.S. on a T-LoRa: Menu → About. Or the release or file name you installed.
+      placeholder: e.g. v1.18.0-er-241d773 or v1.18.0-1ecce20
+    validations:
+      required: true
+
+  - type: input
+    id: board
+    attributes:
+      label: Board and hardware
+      description: The board, and any add-ons (keyboard, GPS, external antenna, power).
+      placeholder: e.g. Heltec V3; T-Deck Plus; T-LoRa V2.1-1.6 with CardKB and buzzer
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How was it installed?
+      options:
+        - Install page (browser)
+        - Downloaded release file
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: radio
+    attributes:
+      label: Region and radio settings
+      description: The preset you chose, or frequency / bandwidth / SF / CR, and transmit power.
+      placeholder: e.g. USA/Canada (910.525 MHz, 62.5 kHz, SF7, CR5, 20 dBm)
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you saw, including any message on the screen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: As exact as you can. Does it happen every time?
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: others
+    attributes:
+      label: Other devices involved
+      description: The other side of a DM or channel, and the phone app with its version, if it plays a part.
+      placeholder: e.g. a second K.I.S.S. on the same channel; MeshCore app 1.x on Android
+
+  - type: textarea
+    id: output
+    attributes:
+      label: Logs and status output
+      description: |
+        Personal Relay: the output of `edge status`, plus `edge opt`, `edge echo` or `edge home` if they're relevant. Anything else useful: a serial log, or a screenshot. **Remove channel keys and passwords first.**
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched the existing issues for this problem.
+          required: true
+        - label: I removed channel keys, passwords and private keys from this report.
+          required: true

@@ -98,6 +98,9 @@ bridges that one hop. A moving node must not act like a normal repeater, so:
   repo is public.
 - Every board's `<board>_personal_relay` env mirrors its `_repeater` env with
   only the example and `ADVERT_NAME` changed.
+- Also fork-only: `.github/ISSUE_TEMPLATE/` (bug and feature forms for the
+  fork's own firmware and site; stock firmware and the phone app are sent to
+  their own issue trackers).
 
 ## Website (`site/`)
 
