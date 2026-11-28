@@ -10,8 +10,10 @@ upstream merges. It stays a fork so fixes can be offered upstream, but PRs for
 this repo must target `thatSFguy/meshcore-extras` (`gh` defaults to the parent).
 The old `thatSFguy/MeshCore-EdgeRelay` (forked via pete1450's repo) is archived.
 
-`README.md` is the authoritative spec (packet policy table, `edge` CLI, home
-detection, echo suppression). Read it before changing the relay.
+`guides/personal-relay.md` is the authoritative spec (packet policy table,
+`edge` CLI, home detection, echo suppression). Read it before changing the
+relay. `README.md` is only an intro and quick start; details go in `guides/`
+(`kiss-messenger.md`, `personal-relay.md`, `building.md`).
 
 ## Intent
 
@@ -49,7 +51,8 @@ bridges that one hop. A moving node must not act like a normal repeater, so:
 ## Fork boundaries
 
 - Changes live in `examples/personal_relay/`, `<board>_personal_relay` envs in
-  `variants/*/platformio.ini`, `build.sh`, the personal relay workflow, and README.
+  `variants/*/platformio.ini`, `build.sh`, the personal relay workflow, and
+  `guides/personal-relay.md`.
 - `src/` and the stock examples stay identical to upstream, except the portable
   `ltoa()` replacement in `src/helpers/TxtDataHelpers.cpp` (STM32 builds).
 - Also fork-only: `LilyGo_TLora_V2_1_1_6_companion_radio_ble_gps` (stock
@@ -90,7 +93,7 @@ bridges that one hop. A moving node must not act like a normal repeater, so:
   `tools/gen_deck_emoji.py`; `toAscii()` turns them into 3-byte markers that
   `textWidth()`/`wrapText()`/`drawText()` draw as pictures. Matched reactions
   show as chips on their message; React and Reply send the app's formats.
-  Screenshots (README, `docs/images/`): a capture build
+  Screenshots (`guides/images/`): a capture build
   (`PLATFORMIO_BUILD_FLAGS="-D DECK_SCREENSHOT"`) sends the screen over USB on
   a two-finger tap (with a click and a toast); `tools/deck_screenshot.py
   <port> <dir>` saves PNGs. Never in released firmware: it shares the USB
@@ -127,6 +130,7 @@ companion CLI/protocol replies change, update the parsers in `site/assets/`.
 4. Add a `_personal_relay` env for any new board with a repeater env, and check
    that existing ones still mirror their repeater env.
 5. Bump `UPSTREAM_VERSION`, `FIRMWARE_VERSION`, `FIRMWARE_BUILD_DATE` in
-   `examples/personal_relay/MyMesh.h`, and the version text in README.
+   `examples/personal_relay/MyMesh.h`, and the version text in the README and
+   `guides/personal-relay.md`.
 6. Build a spread of targets (nRF52, ESP32, STM32, RP2040):
    `pio run -e ProMicro_personal_relay` etc.
