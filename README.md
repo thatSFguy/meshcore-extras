@@ -66,7 +66,7 @@ Phones and Firefox or Safari can still download the firmware files.
 ## Guides
 
 - [**K.I.S.S. Messenger**](guides/kiss-messenger.md): using both devices,
-  wiring the T-LoRa, app compatibility, screenshots.
+  a wiring diagram for building your own, app compatibility, screenshots.
 - [**Personal Relay**](guides/personal-relay.md): why it exists, setup step by
   step, the `edge` command reference, the packet policy.
 - [**Building and the fork's layout**](guides/building.md): building from
