@@ -1,505 +1,88 @@
 # MeshCore Extras
 
 The official [MeshCore](https://github.com/meshcore-dev/MeshCore) firmware plus
-extra firmwares, devices and features, kept in step with upstream releases.
-This is a **fork**: everything stock builds and behaves as upstream, and the
-additions live alongside it.
-
-What it adds:
-
-- **Personal Relay** (`examples/personal_relay`): a car-based directional edge
-  relay, so a repeater in a parked car can serve its owner's companion devices
-  without burdening the wider mesh (see [Why the Personal Relay](#why-the-personal-relay)).
-- **K.I.S.S. Messenger**: a standalone MeshCore messenger, so you can read
-  and type messages without a phone: on a LilyGo T-Deck with an app-style
-  colour UI, or on a LilyGo T-LoRa V2.1-1.6 with a CardKB keyboard (see
-  [K.I.S.S. Messenger](#kiss-messenger)).
-- **GPS companion** for the LilyGo T-LoRa V2.1-1.6 with an external GPS module.
-
-**Install or configure from the browser:
-https://thatsfguy.github.io/meshcore-extras/**
-
-**Upstream:** https://github.com/meshcore-dev/MeshCore — all core protocol,
-radio, and platform code is theirs, under the MIT license (see `LICENSE`).
-
-## Why the Personal Relay
-
-A companion node inside an office building can't always reach the fixed
-repeater infrastructure directly. A relay on a car in the parking lot bridges
-that gap — but a moving relay that behaves like a normal repeater is a bad
-mesh citizen: it would learn and advertise paths that go stale, forward other
-people's traffic, and add airtime load. So this repo adds a new
-`examples/personal_relay` firmware — a **directional edge relay** built on the
-stock `simple_repeater` example, which is left untouched:
-
-- **Uplink:** forwards flood traffic that originates directly from a
-  whitelisted companion the owner configured. Nothing else goes out.
-- **Downlink:** re-emits selected inbound traffic as a single local
-  zero-hop copy for nearby owners. Neighbors ignore it (direct route, empty
-  path) and no return path is learned through the car.
-- **Everything else:** dropped.
-
-## Install and configure from the browser
-
-The project website does it all over USB, no tools to install:
-
-| Page | What it does |
-|---|---|
-| [**Install firmware**](https://thatsfguy.github.io/meshcore-extras/program.html) | Pick Personal Relay or K.I.S.S. Messenger and your board. ESP32 boards flash straight from the browser; nRF52 (RAK4631, T1000-E, …) and RP2040 boards get a `.uf2` to drag onto the board's USB drive; STM32 boards get a `.hex`. |
-| [**Configure relay**](https://thatsfguy.github.io/meshcore-extras/relay.html) | Owners, group channels, echo suppression, home detection, options, name, admin password and radio (with presets), plus a command console. |
-| [**Configure K.I.S.S.**](https://thatsfguy.github.io/meshcore-extras/kiss.html) | Name, radio (with presets), channels, including creating or joining a private channel. Also sets the device clock from your computer. |
-
-Flashing and configuring need **desktop Chrome or Edge** (Windows, Mac, Linux
-or ChromeOS); phones and Firefox/Safari can't talk to USB devices, but can
-still download firmware files. When updating an ESP32 board, leave *Erase
-device* unticked to keep its settings.
-
-The site lives in `site/` and is published by the *Build and deploy site to
-GitHub Pages* workflow (run it manually from the Actions tab). It serves the
-newest published *Personal Relay* release and a K.I.S.S. build of `main`.
-
-## Upstream base and versioning
-
-Based on **MeshCore v1.18.0** (tag `repeater-v1.18.0`, commit `81dbae5`),
-merged from upstream `main` at `75b04ef` (v1.18.0 plus board-support changes).
-Core code in `src/` and the stock examples are unmodified from upstream, apart
-from a portable replacement for the non-standard `ltoa()` in
-`src/helpers/TxtDataHelpers.cpp` (needed for STM32 builds).
-
-The personal relay reports its version as `<upstream>-er-<commit>`, e.g.
-`v1.18.0-er-1911a2f`: the MeshCore release it is built on, `er` for edge
-relay, and the fork commit it was built from (just `v1.18.0-er` for local
-builds outside `build.sh`). The `ver` CLI command and the app's owner info
-show the full string; the OLED shows the upstream part. `build.sh` names the
-firmware files the same way, e.g. `ProMicro_personal_relay-v1.18.0-er-1911a2f.uf2`,
-so a file and the device running it always show the same version. When merging a newer
-upstream release, bump `UPSTREAM_VERSION` in
-`examples/personal_relay/MyMesh.h`.
-
-## What changed vs upstream
-
-The relay lives in `examples/personal_relay/` (plus `build.sh`, a
-`<board>_personal_relay` build target for every board, and its workflow).
-Core protocol code in `src/` and the stock `simple_repeater` example are
-untouched, apart from a portable `ltoa()` replacement needed for STM32 builds.
-The rest of the fork:
-
-- K.I.S.S. Messenger: `examples/companion_radio/ui-kiss/` (T-LoRa) and
-  `examples/companion_radio/ui-deck/` (T-Deck), their build targets in
-  `variants/lilygo_tlora_v2_1/` and `variants/lilygo_tdeck/`, and three small
-  public helpers added to the companion's `MyMesh` (`floodAdvert()`,
-  `persistContacts()`, `persistChannels()`).
-- A T-LoRa V2.1-1.6 BLE companion with an external GPS module
-  (`LilyGo_TLora_V2_1_1_6_companion_radio_ble_gps`).
-- The website (`site/`, `tools/build_site_manifest.py`, Pages workflow).
-
-The relay's changes in detail:
-
-| Area | Change |
-|---|---|
-| `EdgePolicy.h` / `EdgePolicy.cpp` (new) | Packet classifier, persisted configuration, per-class rate limiting, counters. |
-| `MyMesh::onRecvPacket()` | Every received packet is classified **before** stock handling: `EDGE_STOCK` (proceed), `EDGE_LOCAL_COPY` (re-emit once as zero-hop direct, drop original), or `EDGE_DROP`. |
-| `MyMesh::allowPacketForward()` | Final deny guard — stock forwarding is permitted only for packets the policy approved. |
-| `sendSelfAdvertisement()` | No-op. The car never advertises on its own, so the mesh never learns routes through a moving node. A zero-hop advert can be sent by hand (`advert.zerohop` / `edge advert`) so a nearby companion can add it; flood `advert` is refused. |
-| `updateAdvertTimer()` / `updateFloodAdvertTimer()` / `loop()` | Advert timers permanently stopped; timer blocks removed from `loop()`. Boot adverts are also suppressed via the no-op. |
-| `handleCommand()` | New `edge` CLI for configuration over USB serial (see below). |
-| `onRecvPacket()` / `cancelEchoedForward()` | Echo suppression: owner uplinks are held briefly and cancelled if another repeater re-floods them first. |
-| `HomePresence.h` (new), `logRx()` / `loop()` | Home detection: RSSI of the configured home node pauses all relaying while parked at home. |
-| `sendOwnerRelay()`, ACK window | Owner direct messages on a stored route: re-sent unchanged toward their first hop, with the reply's last hop and its delivery ACK copied back to the owner. |
-
-### Packet policy (default)
-
-| Traffic | Flood | Direct (car is next hop) |
-|---|---|---|
-| `TXT_MSG`, `REQ`, `RESPONSE`, `PATH` from a whitelisted owner (heard directly) | Forward normally | — |
-| Same, addressed to an owner (already circulating) | Re-emit locally as one zero-hop copy | — |
-| Same, from an owner, naming another first hop | — | Re-send unchanged (path untouched) so that hop can hear it; cancelled if that hop forwards it first |
-| Same, addressed to an owner, last hop (empty path) | — | Re-emit locally as one zero-hop copy |
-| Same, unrelated to owners | Drop | Drop |
-| `GRP_TXT` / `GRP_DATA` on a configured channel | Owner's own transmission: forward; inbound: local copy | Forward if channel configured |
-| `ADVERT` from an owner | Drop (never export owner adverts) | — |
-| `ADVERT` from anyone else | Drop (mirroring opt-in only, off by default) | — |
-| `ACK` | Drop (forwarding opt-in only, off by default) | Same; a zero-hop ACK within 60 s of carrying an owner message is copied locally (its delivery receipt) |
-| `ANON_REQ` | Login to this node heard directly (empty path, addressed to this node); an owner's login to a remote node (sender key matches a whitelisted owner, heard directly) is forwarded normally; anything else dropped | Link-local zero-hop: info queries, password login, and the resulting admin session from authenticated clients (stock crypto auth still enforced on every packet). An owner's login on a stored route: forwarded if the car is next hop, else re-sent toward the first hop like other owner direct traffic |
-| `TRACE`, `MULTIPART`, `RAW_CUSTOM`, unknown | Drop | Drop |
-| `CONTROL` | Drop | Drop (except link-local zero-hop, e.g. discovery replies, which can't propagate) |
-
-Notes:
-
-- **Source authentication is weak by design of the wire format.** Ordinary
-  packets expose only a 1-byte public-key prefix, so owner matching is
-  prefix-based and spoofable. This firmware does not claim cryptographic
-  attribution of uplink traffic — it fails closed and treats the prefix
-  check as a routing hint, not authentication. Group traffic is matched on
-  the 1-byte channel hash you explicitly configure.
-- Local copies preserve payload bytes and payload type exactly; only the
-  route is reframed to zero-hop direct. Public/channel messages stay
-  public/channel messages — no per-companion DMs are created. The relay
-  never re-signs or re-encrypts anything.
-- Dedup uses the same seen-table as stock MeshCore (hash over payload type
-  + payload), so one inbound message yields at most one local copy.
-- Local copies are rate-limited (30/minute, sliding window).
-- App login and remote administration are allowed, but only from direct radio
-  range (zero-hop): the admin password is still required, and stock's
-  cryptographic authentication applies to every session packet (the 1-byte
-  prefix the classifier sees is only a routing hint). A login is accepted
-  whether the app sends it direct or as a flood (apps flood when they have no
-  stored path, which is usual since this node never advertises), as long as
-  it was heard directly, not relayed. Replies go out zero-hop, never flooded.
-  Relayed (multi-hop) admin traffic is dropped, so the node cannot be
-  administered through the wider mesh. USB serial remains available as the
-  primary console.
-- With no valid policy file on the filesystem, the node boots **receive-only**
-  (fail closed) until you configure owners via the CLI. Zero-hop admin login
-  still works in that state, so it can always be recovered over LoRa.
-
-## Setup
-
-### 1. Set it up like a normal repeater
-
-Flash the personal relay firmware from the
-[install page](https://thatsfguy.github.io/meshcore-extras/program.html)
-(or see [Build and flash](#build-and-flash)) and configure it the way you would
-any MeshCore repeater: name, radio settings, admin password, and so on.
-Everything below is the extra edge configuration on top of that.
-
-Every step below can be done on the
-[relay configuration page](https://thatsfguy.github.io/meshcore-extras/relay.html)
-with the relay plugged in by USB. Underneath, it sends the `edge` commands,
-which you can also type yourself over USB serial at 115200 baud (also on the
-ethernet console where enabled). A full command list is in
-[`edge` command reference](#edge-command-reference).
-
-### 2. Add your companions (required)
-
-Until at least one owner is saved, the relay stays **receive-only** and
-forwards nothing.
-
-1. In the MeshCore phone app, open the companion's node details and copy its
-   public key (64 hex characters).
-2. In the serial console: `edge owner add <paste the key>`.
-3. Confirm with `edge owner list` and `edge status`.
-4. To get the relay into your app's contacts (for admin login), stand near
-   it and run `advert.zerohop` (or `edge advert`). Only companions in direct
-   radio range hear it; it is never re-flooded. If the app already knows the
-   relay and ignores the advert, run `clock sync` first: the relay's clock
-   resets on reboot, and apps ignore adverts older than the last one seen.
-
-Repeat for each companion you own (up to 8).
-
-### 3. Mirror group channels (optional)
-
-To also relay a group channel for your companions, add it with
-`edge chan add public`, or paste the channel key (hex or base64) for any
-other channel. Check with `edge chan list`. Channel messages, including
-your own posts, are dropped until their channel is added.
-
-### 4. Echo suppression (on by default)
-
-Nothing to do unless you want to change it (`edge echo on|off`,
-`edge echo wait <0-20>`).
-
-When your companion is close enough to reach a real repeater on its own, the
-relay's copy of your uplink is redundant. With echo suppression on (the
-default), an owner uplink forward is held for a few extra packet airtimes
-(`edge echo wait`, default 4) on top of the normal random retransmit delay.
-If, during that hold, the relay hears another repeater re-flood the same
-packet, the mesh already has it, so the queued forward is cancelled. If no
-echo arrives, the relay forwards as normal.
-
-This decides per packet, without thresholds: next to infrastructure the relay
-stays quiet, deep inside a building it bridges. It costs a little extra
-latency on uplink only (roughly 1–6 s depending on radio preset). Downlink
-zero-hop copies are never cancelled, since the relay cannot tell whether
-your companion heard the repeater. `edge status` reports cancellations as
-`echo_cancel` (they are still counted in `uplink_fwd`, which counts uplink
-packets accepted for forwarding).
-
-### 5. Home detection (optional)
-
-When the car is parked at home, your base station already covers you, so the
-relay can stop entirely: no uplink forwards and no downlink local copies.
-Admin login over zero-hop still works.
-
-The relay decides it is home from the RSSI of packets your **home node**
-transmits: its zero-hop adverts (matched on the full public key) and any
-flood it repeats (matched on the last path entry, i.e. the node that just
-transmitted). The threshold is deliberately strict, so only the driveway
-counts, not "somewhere in the home repeater's coverage":
-
-- **Home** when the average of the last 4 home-node packets (at least 3)
-  reaches `enter` (default -60 dBm).
-- **Stays home** while that average stays at or above `exit` (default
-  -80 dBm). The gap between the two prevents flapping.
-- **Away** as soon as the average drops below `exit` (driving off, signal
-  fading), or when no strong home-node packet has been heard for `timeout`
-  minutes (default 10). Samples older than the timeout are discarded.
-
-To set it up:
-
-1. Copy your home repeater's public key from the app (the full 64 hex chars is
-   best: a short prefix can collide with another node's path hash).
-2. `edge home set <key>` (or `edge home set <key> -55 -80 15` to choose
-   thresholds and timeout).
-   - The three numbers are **all or none**: `<enter> <exit> <timeout_min>`
-     together, or leave all three off for the defaults (-60 -80 10). Giving
-     only one or two is rejected.
-   - `enter` must be higher (stronger) than `exit`, both between -140 and
-     0 dBm, and the timeout 1–240 minutes.
-   - On any error the command replies `Err - ...` and the previous setting
-     stays in place. To change one value, re-enter the key with all three
-     numbers.
-3. Park where you normally do and run `edge home` a few times. It shows the
-   live average (`avg`), latest reading (`last`), sample count, and the age of
-   the last sample. Pick `enter` a few dB below what you see parked, and
-   `exit` comfortably below that.
-
-Example readings while parked (it needs 3 samples before it can switch to
-home, so expect a few minutes after arriving):
-
-```
-edge home
-  -> OK - away node:b389548d enter:-60 exit:-80 timeout:10m avg:-37 last:-42 n:2 age:34s held:0
-edge home
-  -> OK - HOME node:b389548d enter:-60 exit:-80 timeout:10m avg:-38 last:-40 n:4 age:58s held:0
-```
-
-While home, every forward or local copy the relay would otherwise have sent
-is counted in `held` (shown as `home_held` in `edge status`) instead of being
-transmitted. Send a message from your companion while parked to confirm it
-goes up.
-
-Notes: use RSSI rather than SNR, because SNR saturates at close range. The
-car body and garage walls can shift readings by 10–15 dB, so tune it in place.
-If the home node is quiet (few adverts, little traffic to repeat), make the
-timeout longer than its advert interval.
-
-### 6. Check it
-
-`edge status` shows the policy, echo and home state, and the counters
-(`uplink_fwd`, `echo_cancel`, `home_held`, `local_copy`, `direct_fwd`,
-`owner_direct`, `region_block`, `fwd_block`, `dropped`). The reply line uses
-short names: `up`, `echo`, `copy`, `dfwd`, `odir`, `held`, `rblk`, `fblk`,
-`drop`.
-
-- `owner_direct`: your direct messages on a stored route that the relay
-  re-sent toward their first hop.
-- `region_block`: forwards the relay approved but the stock repeater refused
-  because the flood's region (scope) is unknown here. Add the region with the
-  stock `region` commands.
-- `fwd_block`: approved forwards refused by other stock checks (hop limit,
-  loop detection, or `set repeat off`).
-
-To test while parked at home, `edge home override 30` relays normally for
-30 minutes (1–240); `edge home override off` ends it early. It is not
-saved, so a reboot also ends it.
-
-## `edge` command reference
-
-```
-edge help                    - command index (in the reply, so it reaches the app)
-edge help <cmd>              - usage of one command: status advert owner chan opt echo home
-edge status                  - show policy + counters
-edge advert                  - send one zero-hop advert now (same as advert.zerohop)
-edge owner list              - list owner pubkeys
-edge owner show <idx>        - show one owner pubkey in the reply
-edge owner add <64 hex>      - add owner, save
-edge owner del <64 hex>      - remove owner, save
-edge chan list               - list mirrored channel hashes
-edge chan add <ch>           - add channel, save
-edge chan del <ch>           - remove channel, save
-  <ch> = 2 hex channel hash, channel key (32/64 hex or base64), or 'public'
-edge opt                     - show option settings
-edge opt mirror_adverts 0|1  - remote advert mirroring, save (default 0)
-edge opt fwd_acks 0|1        - ACK forwarding, save (default 0)
-edge opt owner_direct 0|1    - carry owner direct msgs on stored routes, save (default 1)
-edge echo                    - show echo suppression settings + counter
-edge echo on|off             - echo suppression, save (default on)
-edge echo wait <0-20>        - extra uplink hold, in packet airtimes, save (default 4)
-edge home                    - show home detection state + live RSSI
-edge home set <hex> [enter exit timeout_min]
-                             - home node pubkey or prefix, save (defaults -60 -80 10)
-edge home off                - disable home detection, save (default off)
-edge home override <1-240>   - relay normally while home for N minutes (not saved)
-edge home override off       - end the override now
-```
-
-Configuration persists to `/edge_policy` on the device filesystem. Older
-firmware does not know the `echo_*` / `home` / `owner_direct` directives and
-treats such a file as invalid (receive-only), so after a downgrade, re-run
-your setup.
-
-## K.I.S.S. Messenger
-
-A standalone MeshCore messenger, no phone needed, on two devices. Both run the
-companion firmware with their own on-device interface and no Bluetooth, work
-like the phone app's simple mode, and keep messages across a restart (Keep
-messages, on by default: saved to flash at most every 15 s; turning it off
-clears all messages). Repeated copies of the same DM or channel post are shown
-once.
-
-A DM is sent up to three times, the last as a flood with a fresh route, as the
-app does. If its delivery confirmation arrives within 30 s after that, it
-still shows as delivered. A DM that is never confirmed shows a hint: usually
-the other side doesn't have your key (the DM request only half completed, or
-they removed you), so send a flood advert or ask for a DM again.
-
-Releases: [K.I.S.S. Messenger releases](https://github.com/thatSFguy/meshcore-extras/releases?q=kiss-messenger)
-(`-merged.bin` for a fresh install at 0x0, `.bin` to update at 0x10000), or
-the [install page](https://thatsfguy.github.io/meshcore-extras/program.html).
-
-### Works with the MeshCore phone app
-
-Messages and channels are standard MeshCore, so a K.I.S.S. chats with any
-MeshCore companion and app. Beyond that, it follows the conventions of the
-[MeshCore phone app](https://github.com/thatSFguy/meshcore-mobile-app) (Android), so
-the two work together:
-
-| Feature | How it works together |
-|---|---|
-| Private DMs | The app's request/accept exchange in the group chat (`DM request for @[name] mch:r:…` / `DM accepted …`): either side can ask, either side can accept. |
-| Channel sharing (T-Deck) | `meshcore://channel/add?name=…&secret=…`, the app's share link (also the official app's and `docs/qr_codes.md`'s format), sent by DM in either direction. |
-| Reactions | Received from the app (its `r:HHHH:II` format, shared with MeshCore Open; MeshCore One's format is read too) and matched to their message exactly as the app does. The T-Deck also sends them, so they land on the right message in the app. |
-| Replies | The app's `> Sender: quote` line; shown as `[quote] reply`, and the T-Deck sends replies the app shows as replies. |
-| Radio presets, channel rules | The T-Deck's region picker is the app's 47 regional presets; adding channels follows the app's rules (public, hashtag, private). |
-| Look (T-Deck) | The app's dark theme, avatar colours and letters, delivery ticks and wording. |
-
-### LilyGo T-Deck
-
-The T-Deck's keyboard, touch screen and speaker, with a colour interface
-modelled on the phone app: chat list with avatars, message bubbles with
-delivery ticks (✓ sent, ✓✓ delivered, ✗ failed), and the app's dark theme and
-wording.
+extra firmwares and devices, kept in step with upstream releases. Everything
+stock builds and behaves as upstream; the additions live alongside it.
+
+**Contents**
+
+- [What's included](#whats-included)
+- [Quick start](#quick-start)
+- [Guides](#guides)
+- [Releases, issues and upstream](#releases-issues-and-upstream)
+- [License](#license)
+
+## What's included
+
+**K.I.S.S. Messenger:** a standalone MeshCore messenger, so you can read and
+type messages without a phone.
+- **LilyGo T-Deck:** a colour interface modelled on the phone app, with emoji,
+  reactions and replies.
+- **LilyGo T-LoRa V2.1-1.6:** with a CardKB keyboard; the 3D-printable
+  [case and build](https://cults3d.com/en/3d-model/gadget/k-i-s-s-meshtastic-qwerty-messenger-for-t-lora-cardkb-and-piezo-buzzer)
+  are on Cults3D.
+- **Works with the [MeshCore phone app](https://github.com/thatSFguy/meshcore-mobile-app)**:
+  DM requests, channel links, reactions and replies.
 
 <table>
   <tr>
-    <td><img src="docs/images/tdeck-chats.png" width="320" alt="Chat list"><br>Chat list</td>
-    <td><img src="docs/images/tdeck-dm-reply.png" width="320" alt="A DM with a reply, emoji and reactions"><br>Replies, emoji and reactions</td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/tdeck-channel-reaction.png" width="320" alt="A private channel with a reaction"><br>A private channel</td>
-    <td><img src="docs/images/tdeck-react.png" width="320" alt="Reacting to a message"><br>React</td>
-  </tr>
-  <tr>
-    <td><img src="docs/images/tdeck-region.png" width="320" alt="Choosing a region"><br>Region presets</td>
-    <td><img src="docs/images/tdeck-channels.png" width="320" alt="Channels"><br>Channels</td>
+    <td><img src="guides/images/tdeck-chats.png" width="320" alt="T-Deck chat list"></td>
+    <td><img src="guides/images/tdeck-dm-reply.png" width="320" alt="T-Deck chat with a reply, emoji and reactions"></td>
   </tr>
 </table>
 
-- **Install:** [install page](https://thatsfguy.github.io/meshcore-extras/program.html)
-  → *K.I.S.S. Messenger* → *LilyGo TDeck*, or build target
-  `LilyGo_TDeck_kiss_messenger`.
-- **First start** asks for a name, then for your region: the app's 47
-  regional radio presets.
-- **Input:** type on the keyboard, tap and scroll on the screen; the trackball
-  moves and its click selects.
-- **Chats:** tap a message for its options: react, reply, message the
-  sender privately, accept a DM request, mention, resend a failed DM.
-- **Emoji** are drawn in colour, in messages, names and reactions (the
-  app's 184 reaction emoji; Noto Emoji images, Apache 2.0). Others show as
-  `?`.
-- **Reactions** show as chips under the message they're for (👍 2 🔥), and
-  only reactions to your own messages count as new. **React** offers the
-  app's six quick reactions.
-- **Replies:** **Reply** shows *Replying to …* above the text box (tap X or
-  press backspace on an empty box to cancel); a received reply shows its
-  quote in brackets: `[why] why what?`.
-- **Channels** (Settings → Channels): join Public or a hashtag channel, create
-  a private one, or join one with its key. **Share** on a channel's page sends
-  it to a contact by DM as a `meshcore://channel/add` link (the app's share
-  format); a link received in a DM offers *Join <name>?*, and the key is never
-  shown in the chat.
-- **Settings** also cover adverts, sound, time zone, screen timeout, Keep
-  messages and Clear all messages.
+**Personal Relay:** a relay for a parked car. It gives your own companions one
+extra hop into the mesh, forwarding only what they send and copying back only
+what's meant for them. It never advertises itself, so the mesh never learns a
+route through a moving car, and it can pause itself while you're parked at
+home. It runs on any board with a stock repeater build.
 
-### LilyGo T-LoRa V2.1-1.6
+**GPS companion:** the stock Bluetooth companion for the LilyGo T-LoRa
+V2.1-1.6 with an external GPS module.
 
-A LilyGo T-LoRa V2.1-1.6 with an M5Stack CardKB
-keyboard, a piezo buzzer and a vibration motor, in a 3D-printed case. Read and
-type messages on its OLED, no phone needed. It runs the MeshCore companion
-firmware with its own on-device interface (`ui-kiss`) and no Bluetooth; the
-phone app can still connect over a USB-OTG cable.
+## Quick start
 
-**Build your own:** the 3D-printable case and build for this device (T-LoRa,
-CardKB and piezo buzzer) are on Cults3D:
-[K.I.S.S. QWERTY messenger for T-LoRa, CardKB and piezo buzzer](https://cults3d.com/en/3d-model/gadget/k-i-s-s-meshtastic-qwerty-messenger-for-t-lora-cardkb-and-piezo-buzzer).
+Everything is done in the browser over USB, with **desktop Chrome or Edge**.
+Phones and Firefox or Safari can still download the firmware files.
 
-**Wiring**
+1. **Install:** open the
+   [install page](https://thatsfguy.github.io/meshcore-extras/program.html),
+   pick the firmware and your board, and flash it. ESP32 boards flash straight
+   from the browser; nRF52 and RP2040 boards get a `.uf2` to drag onto the
+   board's USB drive; STM32 boards get a `.hex`. When updating, leave *Erase
+   device* unticked to keep your settings.
+2. **Set it up:**
+   - **K.I.S.S. on a T-Deck:** on first start, pick your region and a name on
+     the device itself.
+   - **K.I.S.S. on a T-LoRa:** pick a name on the device, then set the radio
+     and channels on the
+     [K.I.S.S. configuration page](https://thatsfguy.github.io/meshcore-extras/kiss.html).
+   - **Personal Relay:** add your companions (required) and, optionally, group
+     channels and home detection on the
+     [relay configuration page](https://thatsfguy.github.io/meshcore-extras/relay.html).
+     Until a companion is added it only listens.
+3. **Use it:** see the guides below.
 
-| Part | Connection |
-|---|---|
-| CardKB | I2C on GPIO 21 (SDA) / 22 (SCL), shared with the OLED; 3.3 V and GND |
-| Piezo buzzer | GPIO 15, switched by a 2N2222 (GPIO high = on) |
-| Vibration motor | GPIO 13, switched by a 2N2222 (GPIO high = on) |
-| User button | the board's BOOT button (GPIO 0) |
+## Guides
 
-**Install:** [install page](https://thatsfguy.github.io/meshcore-extras/program.html)
-→ *K.I.S.S. Messenger*, or build target `LilyGo_TLora_V2_1_1_6_kiss_messenger`.
-Don't flash the GPS companion build to this hardware: it uses GPIO 15/13 for
-the GPS. **Set up:** on first boot it asks for a name. Then use the
-[K.I.S.S. configuration page](https://thatsfguy.github.io/meshcore-extras/kiss.html)
-for the radio (USA / Canada and EU / UK presets) and channels.
+- [**K.I.S.S. Messenger**](guides/kiss-messenger.md): using both devices,
+  wiring the T-LoRa, app compatibility, screenshots.
+- [**Personal Relay**](guides/personal-relay.md): why it exists, setup step by
+  step, the `edge` command reference, the packet policy.
+- [**Building and the fork's layout**](guides/building.md): building from
+  source, what this fork changes, the website.
 
-**Using it**
+## Releases, issues and upstream
 
-| Screen | Keys |
-|---|---|
-| Chat list | Up/Down to choose, Enter to open, or just start typing. Esc opens the menu. |
-| Chat | Type, Enter to send. Up/Down scrolls. Tab asks someone in the channel for a DM. Esc goes back. |
-| Menu | Flood / zero-hop advert, name, sound on/off, vibrate on/off, keep messages on/off, about |
-
-The screen sleeps after a minute; the first key press only wakes it. The BOOT
-button turns the screen on or off. Sent DMs show `..` while sending, `+` when
-delivered and `!` if delivery failed.
-
-**Reactions and replies** from the app read as one line each:
-`Bob [why] reacted with thumbs up` (emoji named in words, as the OLED can't
-draw them) and `Bob [why] why what?`.
-
-**Simple mode.** Like the phone app's simple mode, it never adds contacts on
-its own. To DM someone, ask in the group chat: Tab, pick the person, Enter.
-That posts `DM request for @[name] mch:r:<your key>`; when they accept (on a
-K.I.S.S. or in the app), their reply carries their key and both sides add each
-other. No adverts are involved.
-
-**Clock.** With no app or GPS, the clock is taken from the mesh, but only when
-two different nodes agree on the time, so one node with a wrong clock can't
-drag it along. The configuration page also sets it from your computer.
-
-## Build and flash
-
-The easiest way is the
-[install page](https://thatsfguy.github.io/meshcore-extras/program.html).
-To build from source instead, same as upstream. From this directory:
-
-```bash
-pio run -e <your_target>        # build
-pio run -e <your_target> -t upload   # flash
-```
-
-Every board with a stock repeater target also has a personal relay target:
-`<board>_personal_relay` (e.g. `RAK_4631_personal_relay`, `Heltec_v3_personal_relay`).
-Each one mirrors its board's normal repeater target with only the example
-swapped to `examples/personal_relay` and the advert name changed to
-`<board> Personal Relay`. Or run the **Build Personal Relay Firmwares**
-workflow from the Actions tab and download the artifact (`.uf2` for the
-RAK4631).
-
-See the [upstream README](https://github.com/meshcore-dev/MeshCore#readme)
-for hardware compatibility, the official web flasher, clients, and unit tests
-(`pio test -e native` covers `src/`, which this fork does not modify).
-
-## Goals and non-goals
-
-Goals: give the owner's companions one extra hop into the mesh; never
-poison other repeaters' learned paths; add no measurable load to the wider
-mesh; stay a single-purpose, reviewable change on top of stock code.
-
-Non-goals: general-purpose repeating, movement detection (beyond the
-optional "parked at home" check), GPS,
-telemetry, administration beyond direct radio range, or any change to the
-MeshCore wire protocol.
+- **Releases:** [all releases](https://github.com/thatSFguy/meshcore-extras/releases):
+  K.I.S.S. Messenger and Personal Relay firmware files.
+- **Issues and ideas:** [open an issue](https://github.com/thatSFguy/meshcore-extras/issues/new/choose).
+- **Upstream:** this is a fork of
+  [meshcore-dev/MeshCore](https://github.com/meshcore-dev/MeshCore), currently
+  based on MeshCore v1.18.0. All core protocol, radio and platform code is
+  theirs. For the stock firmware, see the
+  [upstream README](https://github.com/meshcore-dev/MeshCore#readme).
 
 ## License
 
-MIT — same as upstream. See `LICENSE`.
+MIT, the same as upstream. See `LICENSE`.
