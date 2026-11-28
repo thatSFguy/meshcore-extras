@@ -1,0 +1,46 @@
+name: Feature request
+description: An idea for the Personal Relay, the K.I.S.S. Messenger or the website.
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which part?
+      options:
+        - Personal Relay
+        - K.I.S.S. Messenger, LilyGo T-Deck
+        - K.I.S.S. Messenger, LilyGo T-LoRa V2.1-1.6
+        - K.I.S.S. Messenger, a new board
+        - Website
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or situation, not just the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+      description: How you picture it working.
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Board and hardware
+      description: If it's about specific hardware.
+      placeholder: e.g. T-Deck Plus; Heltec V4
+
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: Alternatives you considered, examples, screenshots.

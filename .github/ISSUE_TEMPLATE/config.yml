@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Stock MeshCore firmware (repeater, room server, companion)
+    url: https://github.com/meshcore-dev/MeshCore/issues
+    about: Problems in the official MeshCore firmware belong upstream.
+  - name: MeshCore phone app (Android)
+    url: https://github.com/thatSFguy/meshcore-mobile-app/issues
+    about: Problems in the phone app itself.
